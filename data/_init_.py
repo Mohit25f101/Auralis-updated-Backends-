@@ -6,17 +6,28 @@
 
 from .dataset_builder import (
     AuralisDatasetBuilder,
+    AudioSceneDataset,
     SyntheticAudioGenerator
 )
 
 from .data_loader import (
-    AuralisDataLoader,
-    create_tf_dataset
+    TFRecordLoader,
+    AudioDataPipeline,
+    create_train_dataset,
+    create_val_dataset,
+    create_test_dataset
 )
 
 __all__ = [
+    # Dataset Builder
     'AuralisDatasetBuilder',
+    'AudioSceneDataset',
     'SyntheticAudioGenerator',
-    'AuralisDataLoader',
-    'create_tf_dataset',
+    
+    # Data Loader
+    'TFRecordLoader',
+    'AudioDataPipeline',
+    'create_train_dataset',
+    'create_val_dataset',
+    'create_test_dataset',
 ]
