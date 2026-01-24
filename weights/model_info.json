@@ -1,0 +1,25 @@
+{
+    "model_name": "auralis_scene_classifier",
+    "version": "1.0.0",
+    "created_at": null,
+    "last_updated": null,
+    "training_info": {
+        "epochs_trained": 0,
+        "best_val_accuracy": 0.0,
+        "training_samples": 0,
+        "validation_samples": 0
+    },
+    "architecture": {
+        "transformer_layers": 6,
+        "d_model": 256,
+        "num_heads": 8,
+        "num_locations": 13,
+        "num_situations": 15
+    },
+    "performance": {
+        "location_accuracy": null,
+        "situation_accuracy": null,
+        "emergency_f1": null,
+        "inference_time_ms": null
+    }
+}

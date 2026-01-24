@@ -1,0 +1,49 @@
+{
+    "dataset_name": "auralis_audio_scenes",
+    "version": "1.0.0",
+    "created_at": null,
+    "total_samples": 0,
+    "total_duration_hours": 0.0,
+    "splits": {
+        "train": 0,
+        "val": 0,
+        "test": 0
+    },
+    "locations": {
+        "Airport Terminal": 0,
+        "Railway Station": 0,
+        "Bus Terminal": 0,
+        "Hospital": 0,
+        "Shopping Mall": 0,
+        "Office": 0,
+        "School/University": 0,
+        "Restaurant/Cafe": 0,
+        "Street/Road": 0,
+        "Home/Residential": 0,
+        "Park/Outdoor": 0,
+        "Stadium/Arena": 0,
+        "Unknown": 0
+    },
+    "situations": {
+        "Normal/Quiet": 0,
+        "Busy/Crowded": 0,
+        "Emergency": 0,
+        "Boarding/Departure": 0,
+        "Waiting": 0,
+        "Traffic": 0,
+        "Meeting/Conference": 0,
+        "Announcement": 0,
+        "Celebration/Event": 0,
+        "Construction": 0,
+        "Weather Event": 0,
+        "Accident": 0,
+        "Medical Emergency": 0,
+        "Security Alert": 0,
+        "Unknown": 0
+    },
+    "emergency_samples": 0,
+    "non_emergency_samples": 0,
+    "avg_duration_seconds": 0.0,
+    "min_duration_seconds": 0.0,
+    "max_duration_seconds": 0.0
+}

@@ -1,0 +1,58 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+temp_*
+*.tmp
+*.temp
+
+# Audio files (large)
+*.wav
+*.mp3
+*.flac
+*.ogg
+!dataset/audio/**/.gitkeep
+
+# Model weights (large)
+*.h5
+*.keras
+*.pt
+*.pth
+*.ckpt
+!weights/.gitkeep
+!weights/model_info.json
+
+# TFRecord files
+*.tfrecord
+
+# Logs
+*.log
+logs/*.csv
+!logs/.gitkeep
+!logs/training_log.csv
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/
+*.egg-info/

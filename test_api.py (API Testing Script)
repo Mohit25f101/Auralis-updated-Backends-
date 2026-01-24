@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+# ==============================
+# 📄 test_api.py
+# ==============================
+# Test the Auralis API endpoints
+# ==============================
+
+import requests
+import sys
+import json
+import os
+
+BASE_URL = "http://127.0.0.1:8000"
+
+
+def test_health():
+    """Test health endpoint."""
+    print("\n🔍 Testing /health...")
+    try:
+        response = requests.get(f"{BASE_URL}/health")
+        if response.status_code == 200:
+            data = response.json()
+            print(f"   ✅ Status: {data['status']}")
+            print(f"   ✅ Version: {data['version']}")
+            print(f"   ✅ Upgraded Mode: {data['upgraded_mode']}")
+            return True
+        else:
+            print(f"   ❌ Status Code: {response.status_code}")
+            return False
+    except requests.exceptions.ConnectionError:
+        print("   ❌ Connection failed. Is the server running?")
+        return False
+
+
+def test_labels():
+    """Test labels endpoint."""
+    print("\n🔍 Testing /labels...")
+    try:
+        response = requests.get(f"{BASE_URL}/labels")
+        if response.status_code == 200:
+            data = response.json()
+            print(f"   ✅ Locations: {data['num_locations']}")
+            print(f"   ✅ Situations: {data['num_situations']}")
+            return True
+        else:
+            print(f"   ❌ Status Code: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return False
+
+
+def test_analyze(audio_file: str = None):
+    """Test analyze endpoint."""
+    print("\n🔍 Testing /analyze...")
+    
+    if audio_file and os.path.exists(audio_file):
+        print(f"   Using file: {audio_file}")
+        
+        try:
+            with open(audio_file, 'rb') as f:
+                files = {'file': (os.path.basename(audio_file), f, 'audio/wav')}
+                response = requests.post(f"{BASE_URL}/analyze", files=files)
+                
+            if response.status_code == 200:
+                data = response.json()
+                print(f"   ✅ Location: {data['location']} ({data['location_confidence']*100:.1f}%)")
+                print(f"   ✅ Situation: {data['situation']} ({data['situation_confidence']*100:.1f}%)")
+                print(f"   ✅ Emergency: {data['is_emergency']}")
+                print(f"   ✅ Mode: {data['analysis_mode']}")
+                print(f"   ✅ Time: {data['processing_time_ms']:.0f}ms")
+                return True
+            else:
+                print(f"   ❌ Status Code: {response.status_code}")
+                print(f"   ❌ Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+            return False
+    else:
+        print("   ⚠️ No audio file provided. Skipping analysis test.")
+        print("   Usage: python test_api.py path/to/audio.wav")
+        return True
+
+
+def test_feedback():
+    """Test feedback endpoint."""
+    print("\n🔍 Testing /feedback...")
+    try:
+        data = {
+            "request_id": "test123",
+            "correct_location": "Airport Terminal",
+            "correct_situation": "Boarding/Departure",
+            "was_emergency": False,
+            "comments": "Test feedback"
+        }
+        response = requests.post(f"{BASE_URL}/feedback", json=data)
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f"   ✅ Status: {result['status']}")
+            return True
+        else:
+            print(f"   ❌ Status Code: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return False
+
+
+def run_all_tests(audio_file: str = None):
+    """Run all API tests."""
+    print("\n" + "="*60)
+    print("🧪 AURALIS API TEST SUITE")
+    print("="*60)
+    
+    results = {
+        "health": test_health(),
+        "labels": test_labels(),
+        "analyze": test_analyze(audio_file),
+        "feedback": test_feedback(),
+    }
+    
+    print("\n" + "="*60)
+    print("📊 TEST RESULTS")
+    print("="*60)
+    
+    passed = sum(results.values())
+    total = len(results)
+    
+    for test, result in results.items():
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"   {test}: {status}")
+    
+    print(f"\n   Total: {passed}/{total} passed")
+    print("="*60 + "\n")
+    
+    return passed == total
+
+
+if __name__ == "__main__":
+    audio_file = sys.argv[1] if len(sys.argv) > 1 else None
+    success = run_all_tests(audio_file)
+    sys.exit(0 if success else 1)

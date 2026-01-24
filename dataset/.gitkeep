@@ -1,0 +1,15 @@
+# This file keeps the dataset directory in git
+# Dataset structure:
+#
+# dataset/
+# ├── audio/
+# │   ├── train/
+# │   ├── val/
+# │   └── test/
+# ├── features/
+# │   ├── train.tfrecord
+# │   ├── val.tfrecord
+# │   └── test.tfrecord
+# └── metadata/
+#     ├── dataset.csv
+#     └── stats.json

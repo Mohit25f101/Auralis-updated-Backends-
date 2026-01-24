@@ -1,0 +1,4 @@
+filename,split,location,situation,duration,emergency,source,quality,notes
+example_airport_001.wav,train,Airport Terminal,Boarding/Departure,5.2,false,recorded,high,Gate announcement
+example_emergency_001.wav,train,Street/Road,Emergency,3.8,true,recorded,medium,Ambulance siren
+example_station_001.wav,val,Railway Station,Normal/Quiet,4.5,false,recorded,high,Platform ambient

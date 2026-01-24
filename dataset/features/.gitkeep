@@ -1,0 +1,7 @@
+# TFRecord feature files will be generated here
+# After running dataset_builder.create_tfrecord_dataset()
+#
+# Expected files:
+# - train.tfrecord
+# - val.tfrecord
+# - test.tfrecord
