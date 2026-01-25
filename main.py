@@ -1,19 +1,20 @@
 # ==============================
-# 📄 main.py
+# 📄 main.py - AURALIS v4.1 STANDALONE
 # ==============================
-# AURALIS ML API - UPGRADED VERSION
-# Integrates all ML upgrades for advanced audio analysis
+# COMPLETE STANDALONE VERSION
+# NO EXTERNAL LOCAL IMPORTS
 # ==============================
 
-# ==============================
-# 🔇 SILENCE WARNINGS (Must be first)
-# ==============================
 import os
+import sys
 import logging
 import warnings
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Silence everything
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 warnings.filterwarnings('ignore')
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.getLogger('transformers').setLevel(logging.ERROR)
@@ -21,282 +22,739 @@ logging.getLogger('transformers').setLevel(logging.ERROR)
 # ==============================
 # 📦 IMPORTS
 # ==============================
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse, Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-import tensorflow as tf
-import tensorflow_hub as hub
+from typing import Optional, List, Dict, Any, Tuple
+from contextlib import asynccontextmanager
+from datetime import datetime
+from collections import defaultdict
 import numpy as np
 import csv
 import requests
-import librosa
 import shutil
-import subprocess
 import json
 import uuid
-from datetime import datetime
-from pathlib import Path
-import asyncio
-from contextlib import asynccontextmanager
+import re
+import time
+import subprocess
+import tempfile
 
 # ==============================
-# 📦 LOCAL IMPORTS
+# 📦 ML IMPORTS
 # ==============================
+print("\n" + "="*60)
+print("🔄 Loading ML Libraries...")
+print("="*60)
+
+# TensorFlow
+tf = None
 try:
-    from config import (
-        AUDIO_CONFIG, LABEL_CONFIG, MODEL_CONFIG, 
-        TRAINING_CONFIG, API_CONFIG,
-        WEIGHTS_DIR, LOGS_DIR, DATASET_DIR, FFMPEG_BIN_DIR
-    )
-    from models.scene_classifier import AuralisSceneClassifier
-    from models.audio_transformer import AudioTransformerEncoder, MelSpectrogramExtractor
-    from models.multimodal_fusion import MultiModalFusionNetwork
-    from inference.predictor import AuralisPredictor
-    from inference.active_learning import ActiveLearningPipeline
-    from inference.streaming_processor import AudioStreamProcessor
-    from training.audio_augmentation import AudioAugmentor
-    from utils.audio_utils import ensure_ffmpeg_available, load_audio_file
-    
-    MODULES_LOADED = True
-    print("✅ All custom modules loaded successfully!")
-except ImportError as e:
-    MODULES_LOADED = False
-    print(f"⚠️ Some modules not loaded: {e}")
-    print("   Running in fallback mode with basic features...")
+    import tensorflow as tf
+    tf.get_logger().setLevel('ERROR')
+    print(f"   ✅ TensorFlow {tf.__version__}")
+except Exception as e:
+    print(f"   ⚠️ TensorFlow: {e}")
+
+# TensorFlow Hub
+hub = None
+try:
+    import tensorflow_hub as hub
+    print("   ✅ TensorFlow Hub")
+except Exception as e:
+    print(f"   ⚠️ TensorFlow Hub: {e}")
+
+# Librosa
+librosa = None
+try:
+    import librosa
+    print(f"   ✅ Librosa {librosa.__version__}")
+except Exception as e:
+    print(f"   ⚠️ Librosa: {e}")
+
+# Soundfile
+sf = None
+try:
+    import soundfile as sf
+    print("   ✅ Soundfile")
+except:
+    pass
+
+# Scipy
+wavfile = None
+try:
+    from scipy.io import wavfile
+    print("   ✅ Scipy")
+except:
+    pass
+
+# Transformers
+pipeline_func = None
+try:
+    from transformers import pipeline as pipeline_func
+    print("   ✅ Transformers")
+except Exception as e:
+    print(f"   ⚠️ Transformers: {e}")
+
+# PyTorch
+torch = None
+try:
+    import torch
+    print(f"   ✅ PyTorch {torch.__version__}")
+except:
+    pass
+
+print("="*60)
+
 
 # ==============================
-# 🎬 FFMPEG DETECTION
+# ⚙️ CONFIGURATION (INLINE)
+# ==============================
+SAMPLE_RATE = 16000
+MAX_DURATION = 60.0
+MIN_DURATION = 0.5
+
+LOCATIONS = [
+    "Airport Terminal", "Railway Station", "Bus Terminal", "Metro/Subway",
+    "Hospital", "Shopping Mall", "Office Building", "School/University",
+    "Restaurant/Cafe", "Street/Road", "Home/Residential", "Park/Outdoor",
+    "Stadium/Arena", "Parking Area", "Construction Site", "Factory/Industrial",
+    "Religious Place", "Government Office", "Bank", "Hotel/Lodge",
+    "Cinema/Theater", "Gym/Sports Center", "Market/Bazaar", "Unknown"
+]
+
+SITUATIONS = [
+    "Normal/Quiet", "Busy/Crowded", "Emergency", "Boarding/Departure",
+    "Waiting", "Traffic", "Meeting/Conference", "Announcement",
+    "Celebration/Event", "Construction", "Weather Event", "Accident",
+    "Medical Emergency", "Security Alert", "Rush Hour", "Flight Delay",
+    "Train Delay", "Sports Event", "Concert/Music", "Unknown"
+]
+
+FFMPEG_PATH = r"D:\photo\ffmpeg\ffmpeg-2026-01-07-git-af6a1dd0b2-full_build\bin"
+LEARNING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learned_data.json")
+
+
+# ==============================
+# 🎬 FFMPEG
 # ==============================
 def setup_ffmpeg():
-    """Ensure FFmpeg is available for audio processing."""
     try:
-        # Check if already available
-        existing = shutil.which("ffmpeg")
-        if existing:
-            print(f"✅ FFmpeg found: {existing}")
+        if shutil.which("ffmpeg"):
+            print("✅ FFmpeg found")
             return True
-        
-        # Try to add from config path
-        ffmpeg_path = FFMPEG_BIN_DIR if MODULES_LOADED else r"D:\photo\ffmpeg\ffmpeg-2026-01-07-git-af6a1dd0b2-full_build\bin"
-        
-        if os.path.isdir(ffmpeg_path):
-            os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
-            found = shutil.which("ffmpeg")
-            if found:
-                print(f"✅ FFmpeg enabled: {found}")
+        if os.path.isdir(FFMPEG_PATH):
+            os.environ["PATH"] = FFMPEG_PATH + os.pathsep + os.environ.get("PATH", "")
+            if shutil.which("ffmpeg"):
+                print("✅ FFmpeg enabled")
                 return True
-        
-        print("⚠️ FFmpeg not found - some features may be limited")
+        print("⚠️ FFmpeg not found")
         return False
-    except Exception as e:
-        print(f"⚠️ FFmpeg setup error: {e}")
+    except:
         return False
 
+
+def convert_audio(input_path, output_path):
+    try:
+        cmd = ["ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", "-f", "wav", output_path]
+        subprocess.run(cmd, capture_output=True, timeout=60)
+        return os.path.exists(output_path)
+    except:
+        return False
+
+
 # ==============================
-# 🤖 MODEL MANAGER
+# 📚 LEARNING SYSTEM
 # ==============================
-class ModelManager:
-    """Manages all ML models for the application."""
+class LearningSystem:
+    def __init__(self):
+        self.boosts = defaultdict(lambda: defaultdict(float))
+        self.corrections = 0
+        self._load()
+    
+    def _load(self):
+        try:
+            if os.path.exists(LEARNING_FILE):
+                with open(LEARNING_FILE, 'r') as f:
+                    data = json.load(f)
+                    self.boosts = defaultdict(lambda: defaultdict(float),
+                        {k: defaultdict(float, v) for k, v in data.get('boosts', {}).items()})
+                    self.corrections = data.get('corrections', 0)
+                if self.corrections > 0:
+                    print(f"📚 Loaded {self.corrections} learned corrections")
+        except:
+            pass
+    
+    def save(self):
+        try:
+            with open(LEARNING_FILE, 'w') as f:
+                json.dump({
+                    'boosts': {k: dict(v) for k, v in self.boosts.items()},
+                    'corrections': self.corrections
+                }, f)
+        except:
+            pass
+    
+    def learn(self, category, value, text, sounds):
+        words = set(re.findall(r'\b\w{4,}\b', text.lower()))
+        for w in words:
+            self.boosts[category][f"{value}::{w}"] += 0.1
+        for s in sounds[:5]:
+            self.boosts[category][f"{value}::sound::{s.lower()}"] += 0.12
+        self.corrections += 1
+        if self.corrections % 3 == 0:
+            self.save()
+    
+    def get_boost(self, category, value, text, sounds):
+        boost = 0.0
+        words = set(re.findall(r'\b\w{4,}\b', text.lower()))
+        for w in words:
+            boost += self.boosts[category].get(f"{value}::{w}", 0)
+        for s in sounds:
+            boost += self.boosts[category].get(f"{value}::sound::{s.lower()}", 0)
+        return min(boost, 0.3)
+
+
+# ==============================
+# 🔊 AUDIO LOADER
+# ==============================
+class AudioLoader:
+    def __init__(self):
+        self.sr = SAMPLE_RATE
+    
+    def load(self, path):
+        if not os.path.exists(path):
+            raise Exception("File not found")
+        
+        audio = None
+        
+        # Try librosa
+        if librosa and audio is None:
+            try:
+                audio, _ = librosa.load(path, sr=self.sr, mono=True)
+                print("   ✅ Loaded with Librosa")
+            except:
+                pass
+        
+        # Try soundfile
+        if sf and audio is None:
+            try:
+                data, orig_sr = sf.read(path)
+                audio = data.astype(np.float32)
+                if orig_sr != self.sr and librosa:
+                    audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=self.sr)
+                if len(audio.shape) > 1:
+                    audio = np.mean(audio, axis=1)
+                print("   ✅ Loaded with Soundfile")
+            except:
+                pass
+        
+        # Try FFmpeg
+        if audio is None:
+            temp = path + ".converted.wav"
+            try:
+                if convert_audio(path, temp) and wavfile:
+                    orig_sr, data = wavfile.read(temp)
+                    if data.dtype == np.int16:
+                        audio = data.astype(np.float32) / 32768.0
+                    elif data.dtype == np.float32:
+                        audio = data
+                    else:
+                        audio = data.astype(np.float32)
+                    if orig_sr != self.sr and librosa:
+                        audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=self.sr)
+                    print("   ✅ Loaded with FFmpeg")
+            except Exception as e:
+                print(f"   ⚠️ FFmpeg error: {e}")
+            finally:
+                if os.path.exists(temp):
+                    os.remove(temp)
+        
+        if audio is None:
+            raise Exception("Could not load audio")
+        
+        # Normalize
+        audio = audio.astype(np.float32)
+        audio = audio - np.mean(audio)
+        mx = np.max(np.abs(audio))
+        if mx > 0:
+            audio = audio / mx * 0.95
+        
+        return audio, len(audio) / self.sr
+    
+    def save_wav(self, audio, path):
+        if wavfile:
+            wavfile.write(path, self.sr, (audio * 32767).astype(np.int16))
+        return path
+
+
+# ==============================
+# 🗣️ WHISPER MANAGER
+# ==============================
+class WhisperManager:
+    HALLUCINATIONS = [
+        "thank you for watching", "please subscribe", "like and subscribe",
+        "thanks for watching", "bye bye", "goodbye", "[music]", "[applause]",
+    ]
     
     def __init__(self):
-        self.whisper = None
-        self.yamnet = None
-        self.yamnet_labels = []
-        self.scene_classifier = None
-        self.audio_transformer = None
-        self.fusion_network = None
-        self.predictor = None
-        self.active_learning = None
-        self.mel_extractor = None
-        self.text_embedder = None
-        self.is_upgraded = False
-        
-    def load_basic_models(self):
-        """Load basic models (Whisper + YAMNet)."""
-        print("\n" + "="*60)
-        print("🔄 Loading Basic AI Models...")
-        print("="*60)
-        
-        # Load Whisper
-        try:
-            from transformers import pipeline
-            self.whisper = pipeline(
-                "automatic-speech-recognition", 
-                model="openai/whisper-small",
-                device=-1  # CPU, use 0 for GPU
-            )
-            print("✅ Whisper loaded!")
-        except Exception as e:
-            print(f"⚠️ Whisper failed: {e}")
-            self.whisper = None
-        
-        # Load YAMNet
-        try:
-            self.yamnet = hub.load("https://tfhub.dev/google/yamnet/1")
-            print("✅ YAMNet loaded!")
-            self._load_yamnet_labels()
-        except Exception as e:
-            print(f"⚠️ YAMNet failed: {e}")
-            self.yamnet = None
-            
-    def _load_yamnet_labels(self):
-        """Load YAMNet class labels."""
-        labels_url = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
-        try:
-            response = requests.get(labels_url, timeout=10)
-            reader = csv.reader(response.text.splitlines())
-            next(reader)  # Skip header
-            self.yamnet_labels = [row[2] for row in reader]
-            print(f"✅ Loaded {len(self.yamnet_labels)} sound labels")
-        except Exception as e:
-            print(f"⚠️ Could not load labels: {e}")
-            self.yamnet_labels = []
-            
-    def load_upgraded_models(self):
-        """Load upgraded ML models."""
-        if not MODULES_LOADED:
-            print("⚠️ Upgraded modules not available")
-            return False
-            
-        print("\n" + "="*60)
-        print("🚀 Loading Upgraded AI Models...")
-        print("="*60)
-        
-        try:
-            # Mel Spectrogram Extractor
-            self.mel_extractor = MelSpectrogramExtractor()
-            print("✅ Mel Extractor initialized!")
-            
-            # Audio Transformer Encoder
-            self.audio_transformer = AudioTransformerEncoder()
-            print("✅ Audio Transformer initialized!")
-            
-            # Scene Classifier
-            self.scene_classifier = AuralisSceneClassifier()
-            print("✅ Scene Classifier initialized!")
-            
-            # Multi-Modal Fusion Network
-            self.fusion_network = MultiModalFusionNetwork()
-            print("✅ Fusion Network initialized!")
-            
-            # Load pre-trained weights if available
-            self._load_pretrained_weights()
-            
-            # Initialize Predictor
-            self.predictor = AuralisPredictor(
-                scene_classifier=self.scene_classifier,
-                audio_transformer=self.audio_transformer,
-                fusion_network=self.fusion_network,
-                mel_extractor=self.mel_extractor,
-                whisper=self.whisper,
-                yamnet=self.yamnet,
-                yamnet_labels=self.yamnet_labels
-            )
-            print("✅ Predictor initialized!")
-            
-            # Initialize Active Learning
-            self.active_learning = ActiveLearningPipeline(
-                model=self.scene_classifier,
-                uncertainty_threshold=TRAINING_CONFIG.uncertainty_threshold
-            )
-            print("✅ Active Learning initialized!")
-            
-            # Load text embedder for fusion
-            self._load_text_embedder()
-            
-            self.is_upgraded = True
-            print("\n✅ All upgraded models loaded successfully!")
+        self.pipe = None
+        self.loaded = False
+    
+    def load(self):
+        if self.loaded:
             return True
-            
-        except Exception as e:
-            print(f"❌ Error loading upgraded models: {e}")
-            import traceback
-            traceback.print_exc()
-            self.is_upgraded = False
+        if not pipeline_func:
+            print("❌ Whisper: Transformers not available")
             return False
-            
-    def _load_pretrained_weights(self):
-        """Load pre-trained weights if available."""
-        weights_path = WEIGHTS_DIR if MODULES_LOADED else Path("weights")
-        
-        # Scene Classifier weights
-        scene_weights = weights_path / "auralis_scene_best.keras"
-        if scene_weights.exists():
-            try:
-                self.scene_classifier.load_weights(str(scene_weights))
-                print(f"✅ Loaded scene classifier weights from {scene_weights}")
-            except Exception as e:
-                print(f"⚠️ Could not load scene weights: {e}")
-                
-        # Audio Transformer weights
-        transformer_weights = weights_path / "audio_transformer.keras"
-        if transformer_weights.exists():
-            try:
-                self.audio_transformer.load_weights(str(transformer_weights))
-                print(f"✅ Loaded transformer weights from {transformer_weights}")
-            except Exception as e:
-                print(f"⚠️ Could not load transformer weights: {e}")
-                
-        # Fusion Network weights
-        fusion_weights = weights_path / "fusion_network.keras"
-        if fusion_weights.exists():
-            try:
-                self.fusion_network.load_weights(str(fusion_weights))
-                print(f"✅ Loaded fusion weights from {fusion_weights}")
-            except Exception as e:
-                print(f"⚠️ Could not load fusion weights: {e}")
-                
-    def _load_text_embedder(self):
-        """Load text embedding model."""
         try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-            
-            model_name = "sentence-transformers/all-MiniLM-L6-v2"
-            self.text_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.text_model = AutoModel.from_pretrained(model_name)
-            self.text_model.eval()
-            print("✅ Text Embedder loaded!")
-        except Exception as e:
-            print(f"⚠️ Text Embedder not loaded: {e}")
-            self.text_tokenizer = None
-            self.text_model = None
-            
-    def get_text_embedding(self, text: str) -> np.ndarray:
-        """Get text embedding using sentence transformer."""
-        if self.text_tokenizer is None or self.text_model is None:
-            # Return dummy embedding
-            return np.zeros(768, dtype=np.float32)
-            
-        try:
-            import torch
-            
-            inputs = self.text_tokenizer(
-                text, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True, 
-                max_length=512
+            print("🔄 Loading Whisper...")
+            self.pipe = pipeline_func(
+                "automatic-speech-recognition",
+                model="openai/whisper-small",
+                chunk_length_s=30,
             )
-            
-            with torch.no_grad():
-                outputs = self.text_model(**inputs)
-                # Mean pooling
-                embeddings = outputs.last_hidden_state.mean(dim=1)
-                
-            return embeddings.numpy()[0]
+            self.loaded = True
+            print("✅ Whisper loaded!")
+            return True
         except Exception as e:
-            print(f"⚠️ Text embedding error: {e}")
-            return np.zeros(768, dtype=np.float32)
+            print(f"❌ Whisper error: {e}")
+            return False
+    
+    def transcribe(self, path):
+        if not self.loaded:
+            return {"text": "", "confidence": 0, "is_reliable": False}
+        
+        try:
+            result = self.pipe(path, generate_kwargs={"task": "translate", "language": "en"})
+            raw = result.get("text", "").strip()
+            
+            if not raw or len(raw) < 3:
+                return {"text": "", "confidence": 0.2, "is_reliable": False}
+            
+            # Check hallucination
+            lower = raw.lower()
+            for h in self.HALLUCINATIONS:
+                if h in lower:
+                    return {"text": "", "raw": raw, "confidence": 0.2, "is_reliable": False}
+            
+            # Check repetition
+            words = raw.split()
+            if len(words) > 5 and len(set(words)) / len(words) < 0.35:
+                return {"text": "", "raw": raw, "confidence": 0.25, "is_reliable": False}
+            
+            # Clean
+            clean = ' '.join(raw.split())
+            clean = re.sub(r'\[.*?\]', '', clean).strip()
+            
+            conf = 0.90 if len(words) >= 10 else (0.85 if len(words) >= 5 else 0.75)
+            
+            return {"text": clean, "raw": raw, "confidence": conf, "is_reliable": True}
+        
+        except Exception as e:
+            print(f"   ⚠️ Transcription error: {str(e)[:50]}")
+            return {"text": "", "confidence": 0, "is_reliable": False, "error": str(e)[:50]}
 
 
 # ==============================
-# 📊 RESPONSE MODELS
+# 🔊 YAMNET MANAGER
+# ==============================
+class YAMNetManager:
+    FILTER_OUT = {"silence", "white noise", "pink noise", "static"}
+    
+    GENERIC = {
+        "speech", "narration", "monologue", "conversation",
+        "male speech", "female speech", "inside", "outside", "room",
+    }
+    
+    SOUND_LOCATIONS = {
+        "aircraft": ["Airport Terminal"], "airplane": ["Airport Terminal"],
+        "jet engine": ["Airport Terminal"], "helicopter": ["Airport Terminal"],
+        "train": ["Railway Station"], "railroad": ["Railway Station"],
+        "rail transport": ["Railway Station"], "subway": ["Metro/Subway"],
+        "car": ["Street/Road"], "vehicle": ["Street/Road"],
+        "traffic": ["Street/Road"], "horn": ["Street/Road"],
+        "siren": ["Hospital", "Street/Road"], "ambulance": ["Hospital"],
+        "crowd": ["Airport Terminal", "Railway Station", "Shopping Mall", "Stadium/Arena"],
+        "applause": ["Stadium/Arena"], "cheering": ["Stadium/Arena"],
+        "bell": ["Religious Place"], "church bell": ["Religious Place"],
+        "construction": ["Construction Site"], "hammer": ["Construction Site"],
+        "bird": ["Park/Outdoor"], "water": ["Park/Outdoor"],
+    }
+    
+    SOUND_SITUATIONS = {
+        "siren": ["Emergency"], "alarm": ["Emergency"],
+        "ambulance": ["Medical Emergency"], "crowd": ["Busy/Crowded"],
+        "applause": ["Celebration/Event"], "cheering": ["Sports Event"],
+        "traffic": ["Traffic"], "horn": ["Traffic"],
+        "construction": ["Construction"], "thunder": ["Weather Event"],
+    }
+    
+    def __init__(self):
+        self.model = None
+        self.labels = []
+        self.loaded = False
+    
+    def load(self):
+        if self.loaded:
+            return True
+        if not hub or not tf:
+            print("❌ YAMNet: TensorFlow not available")
+            return False
+        try:
+            print("🔄 Loading YAMNet...")
+            self.model = hub.load("https://tfhub.dev/google/yamnet/1")
+            self._load_labels()
+            self.loaded = True
+            print(f"✅ YAMNet loaded ({len(self.labels)} classes)")
+            return True
+        except Exception as e:
+            print(f"❌ YAMNet error: {e}")
+            return False
+    
+    def _load_labels(self):
+        try:
+            url = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
+            r = requests.get(url, timeout=10)
+            reader = csv.reader(r.text.splitlines())
+            next(reader)
+            self.labels = [row[2] for row in reader]
+        except:
+            self.labels = [f"Sound_{i}" for i in range(521)]
+    
+    def analyze(self, audio):
+        if not self.loaded:
+            return {"sounds": {}, "location_hints": [], "situation_hints": []}
+        
+        try:
+            scores, _, _ = self.model(audio.astype(np.float32))
+            mean = tf.reduce_mean(scores, axis=0).numpy()
+            
+            all_sounds = {}
+            for i in range(len(mean)):
+                if mean[i] > 0.01 and i < len(self.labels):
+                    all_sounds[self.labels[i]] = float(mean[i])
+            
+            filtered = self._filter(all_sounds)
+            loc_hints = self._location_hints(all_sounds)
+            sit_hints = self._situation_hints(all_sounds)
+            
+            return {
+                "sounds": filtered,
+                "all": all_sounds,
+                "location_hints": loc_hints,
+                "situation_hints": sit_hints,
+            }
+        except Exception as e:
+            print(f"   ⚠️ YAMNet error: {e}")
+            return {"sounds": {}, "location_hints": [], "situation_hints": []}
+    
+    def _filter(self, sounds):
+        result = {}
+        generic = {}
+        for s, score in sounds.items():
+            lower = s.lower()
+            if any(f in lower for f in self.FILTER_OUT):
+                continue
+            if any(g in lower for g in self.GENERIC):
+                if score > 0.05:
+                    generic[s] = score
+            elif score > 0.02:
+                result[s] = round(score, 3)
+        
+        result = dict(sorted(result.items(), key=lambda x: x[1], reverse=True)[:12])
+        if not result and generic:
+            result = dict(sorted(generic.items(), key=lambda x: x[1], reverse=True)[:5])
+        return result
+    
+    def _location_hints(self, sounds):
+        hints = defaultdict(float)
+        for s, score in sounds.items():
+            lower = s.lower()
+            for kw, locs in self.SOUND_LOCATIONS.items():
+                if kw in lower:
+                    for loc in locs:
+                        hints[loc] = max(hints[loc], score)
+        return sorted(hints.items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    def _situation_hints(self, sounds):
+        hints = defaultdict(float)
+        for s, score in sounds.items():
+            lower = s.lower()
+            for kw, sits in self.SOUND_SITUATIONS.items():
+                if kw in lower:
+                    for sit in sits:
+                        hints[sit] = max(hints[sit], score)
+        return sorted(hints.items(), key=lambda x: x[1], reverse=True)[:5]
+
+
+# ==============================
+# 🧠 ANALYZER
+# ==============================
+class Analyzer:
+    def __init__(self, learning):
+        self.learning = learning
+        self._init_keywords()
+    
+    def _init_keywords(self):
+        self.loc_kw = {
+            "Airport Terminal": {
+                "airport": 5, "terminal": 5, "flight": 5, "airline": 5, "aircraft": 5,
+                "boarding": 4.5, "gate": 4, "runway": 5, "takeoff": 5, "landing": 5,
+                "captain": 4, "pilot": 4.5, "cabin": 4, "heathrow": 5, "lufthansa": 5,
+                "emirates": 5, "british airways": 5, "air india": 5, "indigo": 4.5,
+                "economy": 3.5, "business class": 4, "passport": 3.5, "baggage": 3.5,
+                "departure": 4, "arrival": 4, "passengers": 2.5,
+            },
+            "Railway Station": {
+                "railway": 5, "train": 5, "platform": 5, "station": 3.5, "locomotive": 5,
+                "coach": 4, "compartment": 4, "bogey": 4.5, "rail": 4.5, "track": 3.5,
+                "rajdhani": 5, "shatabdi": 5, "indian railways": 5, "irctc": 5,
+                "express": 3, "local train": 4, "reservation": 3.5, "engine": 3,
+            },
+            "Hospital": {
+                "hospital": 5, "doctor": 5, "nurse": 5, "patient": 5, "medical": 4.5,
+                "emergency": 4, "ambulance": 5, "surgery": 5, "ward": 4.5, "icu": 5,
+                "clinic": 4, "medicine": 3.5, "treatment": 4,
+            },
+            "Shopping Mall": {
+                "mall": 5, "shopping": 5, "shop": 4, "store": 4, "sale": 3.5,
+                "discount": 3.5, "customer": 2.5, "escalator": 4.5, "food court": 5,
+            },
+            "Street/Road": {
+                "traffic": 5, "road": 4.5, "highway": 5, "street": 4, "car": 3.5,
+                "vehicle": 3.5, "signal": 4, "crossing": 3.5, "jam": 4, "horn": 3.5,
+            },
+            "Office Building": {
+                "office": 5, "meeting": 4.5, "conference": 5, "presentation": 4.5,
+                "manager": 4, "corporate": 4.5, "company": 3.5, "project": 3.5,
+            },
+            "Stadium/Arena": {
+                "stadium": 5, "arena": 5, "match": 5, "game": 4, "team": 3.5,
+                "score": 4.5, "goal": 5, "cricket": 5, "football": 5, "ipl": 5,
+            },
+            "Religious Place": {
+                "temple": 5, "church": 5, "mosque": 5, "prayer": 4.5, "worship": 4.5,
+                "aarti": 5, "namaz": 5, "mandir": 5, "masjid": 5,
+            },
+            "Restaurant/Cafe": {
+                "restaurant": 5, "cafe": 5, "food": 3.5, "menu": 4.5, "waiter": 4.5,
+                "chef": 5, "table": 3, "order": 3.5,
+            },
+            "Park/Outdoor": {
+                "park": 5, "garden": 5, "outdoor": 4, "nature": 4.5, "tree": 3.5,
+                "bird": 3.5, "walk": 2.5, "bench": 4,
+            },
+            "Metro/Subway": {
+                "metro": 5, "subway": 5, "underground": 5, "delhi metro": 5,
+                "mumbai metro": 5, "token": 3.5,
+            },
+            "Construction Site": {
+                "construction": 5, "cement": 4.5, "crane": 5, "scaffold": 5,
+                "building site": 5, "labor": 3.5,
+            },
+        }
+        
+        self.sit_kw = {
+            "Emergency": {
+                "emergency": 5, "help": 4.5, "fire": 5, "accident": 5, "danger": 5,
+                "police": 4.5, "ambulance": 5, "injured": 5, "attack": 5, "urgent": 4.5,
+            },
+            "Boarding/Departure": {
+                "boarding": 5, "now boarding": 5, "final call": 5, "departure": 4.5,
+                "proceed to": 4.5, "gate": 3.5, "platform": 3.5, "all passengers": 4,
+                "economy customers": 5, "continue boarding": 5,
+            },
+            "Flight Delay": {
+                "delayed": 5, "delay": 5, "postponed": 4.5, "rescheduled": 4.5,
+                "inconvenience": 4, "regret": 4, "technical": 4,
+            },
+            "Announcement": {
+                "attention": 4.5, "announcement": 5, "ladies and gentlemen": 5,
+                "attention please": 5, "information": 4, "kindly": 3.5, "passengers": 3,
+            },
+            "Traffic": {
+                "traffic": 5, "jam": 4.5, "congestion": 5, "heavy traffic": 5,
+                "stuck": 4, "slow": 3.5,
+            },
+            "Busy/Crowded": {
+                "crowded": 5, "busy": 4, "rush": 4, "queue": 4, "packed": 4.5,
+                "rush hour": 5,
+            },
+            "Sports Event": {
+                "goal": 5, "score": 4.5, "match": 4.5, "win": 4, "tournament": 4.5,
+            },
+            "Normal/Quiet": {},
+        }
+    
+    def analyze(self, trans, sounds):
+        text = trans.get("text", "").lower()
+        raw = trans.get("raw", text).lower()
+        reliable = trans.get("is_reliable", False)
+        
+        detected = sounds.get("sounds", {})
+        loc_hints = sounds.get("location_hints", [])
+        sit_hints = sounds.get("situation_hints", [])
+        
+        full_text = f"{text} {raw}".lower()
+        sound_list = list(detected.keys())
+        
+        # Weights
+        tw = 0.70 if reliable and text else 0.25
+        sw = 1.0 - tw
+        
+        # Detect
+        loc, loc_conf, loc_ev = self._detect_loc(full_text, loc_hints, tw, sw, sound_list)
+        sit, sit_conf, is_emg, sit_ev = self._detect_sit(full_text, sit_hints, tw, sw, sound_list)
+        
+        emg_prob = 0.98 if is_emg else self._calc_emg(full_text, sit_hints)
+        overall = (loc_conf + sit_conf) / 2
+        
+        evidence = self._build_ev(text, reliable, loc_ev, sit_ev, detected, loc_hints)
+        summary = self._build_sum(loc, loc_conf, sit, sit_conf, is_emg, emg_prob, text)
+        
+        return {
+            "location": loc,
+            "location_confidence": round(loc_conf, 3),
+            "situation": sit,
+            "situation_confidence": round(sit_conf, 3),
+            "is_emergency": is_emg,
+            "emergency_probability": round(emg_prob, 3),
+            "overall_confidence": round(overall, 3),
+            "evidence": evidence,
+            "summary": summary,
+            "detected_sounds": sound_list[:10],
+            "text_reliable": reliable,
+        }
+    
+    def _detect_loc(self, text, hints, tw, sw, sounds):
+        scores = {}
+        evidence = {}
+        
+        for loc, kws in self.loc_kw.items():
+            score = 0.0
+            ev = []
+            matched = []
+            
+            kw_score = sum(w for k, w in kws.items() if k in text)
+            if kw_score > 0:
+                matched = [k for k in kws if k in text][:4]
+                score += min(kw_score / 10, 1.5) * tw
+                if matched:
+                    ev.append(f"Keywords: {', '.join(matched)}")
+            
+            for hint_loc, hint_score in hints:
+                if hint_loc == loc and hint_score > 0.05:
+                    score += hint_score * sw * 2
+                    ev.append(f"Sound: {loc}")
+            
+            boost = self.learning.get_boost('location', loc, text, sounds)
+            if boost > 0:
+                score += boost
+            
+            if score > 0.1:
+                scores[loc] = score
+                evidence[loc] = ev
+        
+        if not scores:
+            if hints:
+                best = hints[0]
+                return best[0], 0.55 + best[1] * 0.3, [f"Sound suggests: {best[0]}"]
+            return "Unknown", 0.40, ["No clear indicators"]
+        
+        best = max(scores, key=scores.get)
+        conf = 0.70 + min(scores[best] / 2, 0.28)
+        return best, round(conf, 3), evidence.get(best, [])
+    
+    def _detect_sit(self, text, hints, tw, sw, sounds):
+        candidates = []
+        
+        for sit, kws in self.sit_kw.items():
+            score = 0.0
+            ev = []
+            
+            kw_score = sum(w for k, w in kws.items() if k in text)
+            if kw_score > 0:
+                matched = [k for k in kws if k in text][:3]
+                score += min(kw_score / 8, 1.5) * tw
+                if matched:
+                    ev.append(f"Keywords: {', '.join(matched)}")
+            
+            for hint_sit, hint_score in hints:
+                if hint_sit == sit and hint_score > 0.05:
+                    score += hint_score * sw * 2
+                    ev.append(f"Sound: {sit}")
+            
+            boost = self.learning.get_boost('situation', sit, text, sounds)
+            score += boost
+            
+            is_emg = sit in ["Emergency", "Medical Emergency", "Accident"]
+            priority = 10 if is_emg else (7 if sit == "Boarding/Departure" else 5)
+            
+            if score > 0.1:
+                candidates.append({"sit": sit, "score": score, "priority": priority, 
+                                  "is_emg": is_emg, "ev": ev})
+        
+        if not candidates:
+            if hints:
+                best = hints[0]
+                return best[0], 0.60, False, [f"Sound: {best[0]}"]
+            return "Normal/Quiet", 0.55, False, ["No specific situation"]
+        
+        candidates.sort(key=lambda x: (x["priority"], x["score"]), reverse=True)
+        best = candidates[0]
+        conf = 0.68 + min(best["score"] / 1.5, 0.28)
+        return best["sit"], round(conf, 3), best["is_emg"], best["ev"]
+    
+    def _calc_emg(self, text, hints):
+        prob = 0.03
+        for w, b in {"help": 0.15, "emergency": 0.2, "fire": 0.2, "accident": 0.18}.items():
+            if w in text:
+                prob += b
+        for sit, score in hints:
+            if sit in ["Emergency", "Medical Emergency"]:
+                prob += score * 0.4
+        return min(prob, 0.95)
+    
+    def _build_ev(self, text, reliable, loc_ev, sit_ev, sounds, hints):
+        ev = []
+        if reliable and text:
+            preview = text[:80] + "..." if len(text) > 80 else text
+            ev.append(f'🗣️ Speech: "{preview}"')
+        else:
+            ev.append("🗣️ Speech unclear - using sound analysis")
+        
+        for e in loc_ev[:2]:
+            ev.append(f"📍 {e}")
+        for e in sit_ev[:2]:
+            ev.append(f"🎯 {e}")
+        
+        if sounds:
+            ev.append(f"🔊 Sounds: {', '.join(list(sounds.keys())[:5])}")
+        
+        if hints:
+            hint_str = ", ".join([f"{h[0]} ({h[1]*100:.0f}%)" for h in hints[:2]])
+            ev.append(f"💡 Hints: {hint_str}")
+        
+        return ev[:6]
+    
+    def _build_sum(self, loc, loc_conf, sit, sit_conf, is_emg, emg_prob, text):
+        parts = [
+            f"📍 **{loc}** ({loc_conf*100:.0f}%)",
+            f"🎯 **{sit}** ({sit_conf*100:.0f}%)"
+        ]
+        if is_emg:
+            parts.append(f"🚨 **EMERGENCY** ({emg_prob*100:.0f}%)")
+        if text and len(text) > 10:
+            parts.append(f'💬 "{text[:50]}..."')
+        return " | ".join(parts)
+
+
+# ==============================
+# 📊 MODELS
 # ==============================
 class AnalysisResult(BaseModel):
-    """Response model for audio analysis."""
     location: str
     location_confidence: float
     situation: str
@@ -305,610 +763,179 @@ class AnalysisResult(BaseModel):
     emergency_probability: float
     overall_confidence: float
     transcribed_text: str
+    text_reliable: bool
     detected_sounds: List[str]
     evidence: List[str]
     summary: str
-    analysis_mode: str
     processing_time_ms: float
     request_id: str
+    timestamp: str
+    audio_duration: float
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    models: Dict[str, bool]
     timestamp: str
 
 
 class FeedbackRequest(BaseModel):
-    """Request model for user feedback."""
     request_id: str
     correct_location: Optional[str] = None
     correct_situation: Optional[str] = None
-    was_emergency: Optional[bool] = None
-    comments: Optional[str] = None
-
-
-class HealthResponse(BaseModel):
-    """Response model for health check."""
-    status: str
-    version: str
-    models_loaded: Dict[str, bool]
-    upgraded_mode: bool
-    timestamp: str
 
 
 # ==============================
-# 🧠 ANALYSIS ENGINE
+# 🌐 GLOBALS
 # ==============================
-class AnalysisEngine:
-    """
-    Core analysis engine that handles both basic and upgraded inference.
-    """
-    
-    def __init__(self, model_manager: ModelManager):
-        self.models = model_manager
-        self.analysis_history = []
-        
-    def analyze_basic(
-        self,
-        audio: np.ndarray,
-        text: str,
-        sounds: Dict[str, float]
-    ) -> Dict[str, Any]:
-        """
-        Basic rule-based analysis (fallback mode).
-        """
-        text_lower = text.lower()
-        sound_labels = [s.lower() for s in sounds.keys()]
-        
-        # Keywords for detection
-        location_keywords = {
-            "Airport Terminal": ["flight", "boarding", "gate", "terminal", "aircraft", "pilot"],
-            "Railway Station": ["train", "platform", "coach", "railway", "track", "station"],
-            "Bus Terminal": ["bus", "route", "terminal", "passenger"],
-            "Hospital": ["doctor", "nurse", "patient", "emergency", "medical", "ambulance"],
-            "Shopping Mall": ["shop", "store", "mall", "sale", "customer"],
-            "Office": ["meeting", "conference", "office", "work", "presentation"],
-            "School/University": ["class", "student", "teacher", "lecture", "exam"],
-            "Restaurant/Cafe": ["food", "order", "table", "menu", "waiter"],
-            "Street/Road": ["car", "traffic", "road", "drive", "vehicle"],
-            "Home/Residential": ["home", "house", "room", "family"],
-            "Park/Outdoor": ["park", "tree", "bird", "nature", "outdoor"],
-            "Stadium/Arena": ["game", "team", "score", "match", "crowd", "cheer"],
-        }
-        
-        situation_keywords = {
-            "Emergency": ["help", "fire", "emergency", "accident", "danger", "police", "ambulance"],
-            "Boarding/Departure": ["boarding", "departure", "gate", "flight", "train leaving"],
-            "Announcement": ["attention", "announcement", "please", "passengers"],
-            "Traffic": ["traffic", "jam", "slow", "congestion"],
-            "Meeting/Conference": ["meeting", "agenda", "discuss", "presentation"],
-            "Celebration/Event": ["congratulations", "happy", "celebrate", "party"],
-        }
-        
-        emergency_sounds = ["siren", "alarm", "scream", "glass breaking", "explosion", "gunshot"]
-        
-        # Detect location
-        location = "Unknown"
-        location_confidence = 0.3
-        
-        for loc, keywords in location_keywords.items():
-            matches = sum(1 for kw in keywords if kw in text_lower)
-            if matches > 0:
-                conf = min(0.5 + matches * 0.15, 0.95)
-                if conf > location_confidence:
-                    location = loc
-                    location_confidence = conf
-                    
-        # Check sound labels for location hints
-        for label in sound_labels:
-            if "aircraft" in label or "airplane" in label:
-                if location_confidence < 0.7:
-                    location = "Airport Terminal"
-                    location_confidence = 0.75
-            elif "train" in label:
-                if location_confidence < 0.7:
-                    location = "Railway Station"
-                    location_confidence = 0.75
-            elif "traffic" in label or "car" in label:
-                if location_confidence < 0.6:
-                    location = "Street/Road"
-                    location_confidence = 0.65
-                    
-        # Detect situation
-        situation = "Normal/Quiet"
-        situation_confidence = 0.5
-        is_emergency = False
-        emergency_prob = 0.1
-        
-        for sit, keywords in situation_keywords.items():
-            matches = sum(1 for kw in keywords if kw in text_lower)
-            if matches > 0:
-                conf = min(0.5 + matches * 0.2, 0.95)
-                if conf > situation_confidence:
-                    situation = sit
-                    situation_confidence = conf
-                    
-        # Check for emergency
-        for emg_sound in emergency_sounds:
-            if any(emg_sound in label for label in sound_labels):
-                is_emergency = True
-                emergency_prob = max(emergency_prob, 0.8)
-                situation = "Emergency"
-                situation_confidence = 0.9
-                break
-                
-        for emg_word in situation_keywords.get("Emergency", []):
-            if emg_word in text_lower:
-                is_emergency = True
-                emergency_prob = max(emergency_prob, 0.85)
-                situation = "Emergency"
-                situation_confidence = 0.9
-                break
-        
-        # Build evidence
-        evidence = []
-        if text and text != "Speech unclear":
-            evidence.append(f"Speech detected: '{text[:50]}...'")
-        if sounds:
-            top_sounds = list(sounds.keys())[:3]
-            evidence.append(f"Top sounds: {', '.join(top_sounds)}")
-            
-        # Build summary
-        summary = f"Audio analysis suggests location is '{location}' "
-        summary += f"with {location_confidence*100:.0f}% confidence. "
-        summary += f"Current situation appears to be '{situation}'. "
-        if is_emergency:
-            summary += "⚠️ EMERGENCY INDICATORS DETECTED!"
-        
-        overall_confidence = (location_confidence + situation_confidence) / 2
-        
-        return {
-            "location": location,
-            "location_confidence": round(location_confidence, 3),
-            "situation": situation,
-            "situation_confidence": round(situation_confidence, 3),
-            "is_emergency": is_emergency,
-            "emergency_probability": round(emergency_prob, 3),
-            "overall_confidence": round(overall_confidence, 3),
-            "evidence": evidence,
-            "summary": summary,
-            "analysis_mode": "basic"
-        }
-        
-    def analyze_upgraded(
-        self,
-        audio: np.ndarray,
-        text: str,
-        sounds: Dict[str, float]
-    ) -> Dict[str, Any]:
-        """
-        Advanced neural network-based analysis.
-        """
-        try:
-            # Extract mel spectrogram
-            mel_spec = self.models.mel_extractor.extract(audio)
-            mel_batch = np.expand_dims(mel_spec, axis=0)
-            
-            # Get audio embedding from transformer
-            audio_embedding = self.models.audio_transformer(mel_batch, training=False)
-            audio_embedding = audio_embedding.numpy()[0]
-            
-            # Get text embedding
-            text_embedding = self.models.get_text_embedding(text)
-            
-            # Get sound scores (YAMNet output as feature)
-            if sounds:
-                sound_scores = np.zeros(521)  # YAMNet has 521 classes
-                for i, (label, score) in enumerate(sounds.items()):
-                    if i < 521:
-                        sound_scores[i] = score
-            else:
-                sound_scores = np.zeros(521)
-                
-            # Use fusion network if available
-            if self.models.fusion_network is not None:
-                try:
-                    inputs = (
-                        np.expand_dims(audio_embedding, 0),
-                        np.expand_dims(text_embedding, 0),
-                        np.expand_dims(sound_scores, 0)
-                    )
-                    predictions = self.models.fusion_network(inputs, training=False)
-                    
-                    # Extract predictions
-                    location_probs = predictions['location'].numpy()[0]
-                    situation_probs = predictions['situation'].numpy()[0]
-                    confidence = float(predictions['confidence'].numpy()[0][0])
-                    emergency_prob = float(predictions['emergency'].numpy()[0][0])
-                    
-                except Exception as e:
-                    print(f"⚠️ Fusion network error: {e}")
-                    # Fallback to scene classifier
-                    return self._use_scene_classifier(audio_embedding, text_embedding, text, sounds)
-                    
-            else:
-                # Use scene classifier
-                return self._use_scene_classifier(audio_embedding, text_embedding, text, sounds)
-            
-            # Get top predictions
-            location_idx = np.argmax(location_probs)
-            situation_idx = np.argmax(situation_probs)
-            
-            location = LABEL_CONFIG.locations[location_idx]
-            location_confidence = float(location_probs[location_idx])
-            situation = LABEL_CONFIG.situations[situation_idx]
-            situation_confidence = float(situation_probs[situation_idx])
-            is_emergency = emergency_prob > 0.5
-            
-            # Build evidence
-            evidence = []
-            if text and text != "Speech unclear":
-                evidence.append(f"Transcription: '{text[:80]}...'")
-            
-            # Add top location alternatives
-            top_locs = np.argsort(location_probs)[-3:][::-1]
-            alt_locs = [f"{LABEL_CONFIG.locations[i]} ({location_probs[i]*100:.1f}%)" for i in top_locs[1:]]
-            if alt_locs:
-                evidence.append(f"Alternative locations: {', '.join(alt_locs)}")
-                
-            # Add detected sounds
-            if sounds:
-                top_sounds = list(sounds.keys())[:5]
-                evidence.append(f"Detected sounds: {', '.join(top_sounds)}")
-            
-            # Build summary
-            summary = f"Neural network analysis identified this as '{location}' "
-            summary += f"with {location_confidence*100:.1f}% confidence. "
-            summary += f"The situation is '{situation}' ({situation_confidence*100:.1f}% confidence). "
-            if is_emergency:
-                summary += f"⚠️ EMERGENCY DETECTED with {emergency_prob*100:.1f}% probability!"
-            
-            return {
-                "location": location,
-                "location_confidence": round(location_confidence, 3),
-                "situation": situation,
-                "situation_confidence": round(situation_confidence, 3),
-                "is_emergency": is_emergency,
-                "emergency_probability": round(emergency_prob, 3),
-                "overall_confidence": round(confidence, 3),
-                "evidence": evidence,
-                "summary": summary,
-                "analysis_mode": "upgraded_neural",
-                "all_location_probs": {
-                    LABEL_CONFIG.locations[i]: float(location_probs[i])
-                    for i in range(len(LABEL_CONFIG.locations))
-                },
-                "all_situation_probs": {
-                    LABEL_CONFIG.situations[i]: float(situation_probs[i])
-                    for i in range(len(LABEL_CONFIG.situations))
-                }
-            }
-            
-        except Exception as e:
-            print(f"⚠️ Upgraded analysis error: {e}")
-            import traceback
-            traceback.print_exc()
-            # Fallback to basic analysis
-            return self.analyze_basic(audio, text, sounds)
-            
-    def _use_scene_classifier(
-        self,
-        audio_embedding: np.ndarray,
-        text_embedding: np.ndarray,
-        text: str,
-        sounds: Dict[str, float]
-    ) -> Dict[str, Any]:
-        """Use scene classifier for prediction."""
-        try:
-            result = self.models.scene_classifier.predict_single(
-                audio_embedding, text_embedding
-            )
-            
-            evidence = []
-            if text and text != "Speech unclear":
-                evidence.append(f"Transcription: '{text[:80]}...'")
-            if sounds:
-                top_sounds = list(sounds.keys())[:5]
-                evidence.append(f"Detected sounds: {', '.join(top_sounds)}")
-                
-            summary = f"Scene classifier identified '{result['location']}' "
-            summary += f"({result['location_confidence']*100:.1f}% confidence). "
-            summary += f"Situation: '{result['situation']}'. "
-            if result['is_emergency']:
-                summary += "⚠️ EMERGENCY INDICATORS DETECTED!"
-                
-            return {
-                "location": result['location'],
-                "location_confidence": round(result['location_confidence'], 3),
-                "situation": result['situation'],
-                "situation_confidence": round(result['situation_confidence'], 3),
-                "is_emergency": result['is_emergency'],
-                "emergency_probability": round(result['emergency_probability'], 3),
-                "overall_confidence": round(result['overall_confidence'], 3),
-                "evidence": evidence,
-                "summary": summary,
-                "analysis_mode": "scene_classifier"
-            }
-        except Exception as e:
-            print(f"⚠️ Scene classifier error: {e}")
-            # Final fallback
-            return self.analyze_basic(
-                np.zeros(16000),  # dummy
-                text,
-                sounds
-            )
-    
-    def analyze(
-        self,
-        audio: np.ndarray,
-        text: str,
-        sounds: Dict[str, float],
-        force_basic: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Main analysis method. Uses upgraded models if available.
-        """
-        if force_basic or not self.models.is_upgraded:
-            return self.analyze_basic(audio, text, sounds)
-        else:
-            return self.analyze_upgraded(audio, text, sounds)
+loader = AudioLoader()
+whisper = WhisperManager()
+yamnet = YAMNetManager()
+learning = LearningSystem()
+analyzer = Analyzer(learning)
+history = {}
 
 
 # ==============================
-# 🌐 GLOBAL INSTANCES
-# ==============================
-model_manager = ModelManager()
-analysis_engine = None
-
-
-# ==============================
-# 🚀 APPLICATION LIFESPAN
+# 🚀 LIFESPAN
 # ==============================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
-    global analysis_engine
-    
     print("\n" + "="*60)
-    print("🚀 AURALIS ML SYSTEM - STARTING UP")
+    print("🚀 AURALIS v4.1 - STANDALONE")
     print("="*60)
     
-    # Setup FFmpeg
     setup_ffmpeg()
-    
-    # Load basic models
-    model_manager.load_basic_models()
-    
-    # Try to load upgraded models
-    model_manager.load_upgraded_models()
-    
-    # Initialize analysis engine
-    analysis_engine = AnalysisEngine(model_manager)
+    whisper.load()
+    yamnet.load()
     
     print("\n" + "="*60)
-    if model_manager.is_upgraded:
-        print("🎯 AURALIS RUNNING IN UPGRADED MODE")
-    else:
-        print("🔧 AURALIS RUNNING IN BASIC MODE")
+    print("✅ READY")
     print("="*60)
-    print("🌐 Server ready at http://127.0.0.1:8000")
-    print("📚 API docs at http://127.0.0.1:8000/docs")
+    print(f"🌐 http://127.0.0.1:8000")
+    print(f"📚 http://127.0.0.1:8000/docs")
+    print(f"📍 {len(LOCATIONS)} locations | 🎯 {len(SITUATIONS)} situations")
+    print(f"🔊 {len(yamnet.labels)} sounds | 📚 {learning.corrections} corrections")
     print("="*60 + "\n")
     
     yield
     
-    # Cleanup
-    print("\n👋 Shutting down Auralis...")
+    learning.save()
+    print("💾 Saved | 👋 Bye")
 
 
 # ==============================
-# 🚀 FASTAPI APP
+# 🚀 APP
 # ==============================
-app = FastAPI(
-    title="Auralis ML API",
-    description="Advanced Audio Scene Analysis using Deep Learning",
-    version="2.0.0",
-    lifespan=lifespan
-)
-
-# ==============================
-# 🔧 CORS CONFIGURATION
-# ==============================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
+app = FastAPI(title="Auralis", version="4.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 
 # ==============================
 # 📍 ROUTES
 # ==============================
-
-@app.get("/", tags=["General"])
+@app.get("/")
 async def root():
-    """Redirect to API documentation."""
-    return RedirectResponse(url="/docs")
-
+    return RedirectResponse("/docs")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    """Handle favicon request."""
-    return Response(content=b"", media_type="image/x-icon", status_code=200)
+    return Response(content=b"", media_type="image/x-icon")
 
-
-@app.get("/health", response_model=HealthResponse, tags=["General"])
-async def health_check():
-    """Check API health and model status."""
+@app.get("/health", response_model=HealthResponse)
+async def health():
     return HealthResponse(
-        status="healthy",
-        version="2.0.0",
-        models_loaded={
-            "whisper": model_manager.whisper is not None,
-            "yamnet": model_manager.yamnet is not None,
-            "scene_classifier": model_manager.scene_classifier is not None,
-            "audio_transformer": model_manager.audio_transformer is not None,
-            "fusion_network": model_manager.fusion_network is not None,
-            "text_embedder": model_manager.text_model is not None,
-        },
-        upgraded_mode=model_manager.is_upgraded,
+        status="healthy", version="4.1.0",
+        models={"whisper": whisper.loaded, "yamnet": yamnet.loaded},
         timestamp=datetime.now().isoformat()
     )
 
-
-@app.get("/labels", tags=["General"])
-async def get_labels():
-    """Get all available location and situation labels."""
-    if MODULES_LOADED:
-        return {
-            "locations": LABEL_CONFIG.locations,
-            "situations": LABEL_CONFIG.situations,
-            "num_locations": LABEL_CONFIG.num_locations,
-            "num_situations": LABEL_CONFIG.num_situations
-        }
-    else:
-        return {
-            "locations": [
-                "Airport Terminal", "Railway Station", "Bus Terminal",
-                "Hospital", "Shopping Mall", "Office", "School/University",
-                "Restaurant/Cafe", "Street/Road", "Home/Residential",
-                "Park/Outdoor", "Stadium/Arena", "Unknown"
-            ],
-            "situations": [
-                "Normal/Quiet", "Busy/Crowded", "Emergency",
-                "Boarding/Departure", "Waiting", "Traffic",
-                "Meeting/Conference", "Announcement", "Celebration/Event",
-                "Construction", "Weather Event", "Accident",
-                "Medical Emergency", "Security Alert", "Unknown"
-            ]
-        }
+@app.get("/labels")
+async def labels():
+    return {"locations": LOCATIONS, "situations": SITUATIONS, "sounds": len(yamnet.labels)}
 
 
-@app.post("/analyze", response_model=AnalysisResult, tags=["Analysis"])
-async def analyze_audio(
-    file: UploadFile = File(...),
-    force_basic: bool = False
-):
-    """
-    Analyze uploaded audio file.
+@app.post("/analyze", response_model=AnalysisResult)
+async def analyze(file: UploadFile = File(...)):
+    start = time.time()
+    rid = uuid.uuid4().hex[:8]
     
-    - **file**: Audio file (WAV, MP3, FLAC, etc.)
-    - **force_basic**: Force basic analysis mode (skip neural network)
-    
-    Returns detailed analysis including:
-    - Location detection
-    - Situation classification
-    - Emergency detection
-    - Transcribed speech
-    - Detected sounds
-    """
-    import time
-    start_time = time.time()
-    
-    request_id = str(uuid.uuid4())[:8]
-    temp_filename = f"temp_{request_id}_{file.filename}"
+    tmp = tempfile.gettempdir()
+    ext = os.path.splitext(file.filename)[1] or ".wav"
+    orig = os.path.join(tmp, f"aur_{rid}{ext}")
+    wav = os.path.join(tmp, f"aur_{rid}.wav")
     
     print("\n" + "="*60)
-    print(f"📥 RECEIVED: {file.filename}")
-    print(f"   Request ID: {request_id}")
-    print(f"   Mode: {'Basic' if force_basic else 'Auto'}")
+    print(f"📥 {file.filename} | ID: {rid}")
     print("="*60)
     
     try:
-        # Save uploaded file
-        contents = await file.read()
-        with open(temp_filename, "wb") as f:
-            f.write(contents)
-        print(f"💾 Saved: {temp_filename} ({len(contents)} bytes)")
+        content = await file.read()
+        with open(orig, "wb") as f:
+            f.write(content)
+        print(f"💾 {len(content)/1024:.1f} KB")
         
-        # Load audio
-        print("🔊 Loading audio...")
-        try:
-            audio, sr = librosa.load(temp_filename, sr=16000, mono=True)
-            duration = len(audio) / sr
-            print(f"⏱️ Duration: {duration:.2f}s, Samples: {len(audio)}")
-            
-            if duration < 0.5:
-                raise HTTPException(status_code=400, detail="Audio too short (min 0.5s)")
-            if duration > 300:
-                print("⚠️ Audio too long, truncating to 5 minutes")
-                audio = audio[:sr * 300]
-                
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not load audio: {str(e)}")
+        print("🔊 Loading...")
+        audio, dur = loader.load(orig)
+        print(f"⏱️ {dur:.2f}s")
         
-        # Transcribe with Whisper
+        if dur < MIN_DURATION:
+            raise HTTPException(400, "Too short")
+        if dur > MAX_DURATION:
+            audio = audio[:int(SAMPLE_RATE * MAX_DURATION)]
+            dur = MAX_DURATION
+        
+        loader.save_wav(audio, wav)
+        
         print("🎤 Transcribing...")
-        text = "Speech unclear"
-        if model_manager.whisper:
-            try:
-                result = model_manager.whisper(temp_filename)
-                text = result.get("text", "Speech unclear").strip()
-                if not text:
-                    text = "Speech unclear"
-                print(f"📝 Text: '{text[:100]}{'...' if len(text) > 100 else ''}'")
-            except Exception as e:
-                print(f"⚠️ Whisper error: {e}")
+        trans = whisper.transcribe(wav)
+        if trans.get("is_reliable"):
+            print(f"📝 ✓ '{trans['text'][:70]}...'")
+        else:
+            print(f"📝 ⚠️ Unreliable")
         
-        # Analyze with YAMNet
-        print("🔊 Analyzing sounds...")
-        sounds = {}
-        if model_manager.yamnet and len(model_manager.yamnet_labels) > 0:
-            try:
-                scores, _, _ = model_manager.yamnet(audio)
-                mean_scores = tf.reduce_mean(scores, axis=0).numpy()
-                top_indices = np.argsort(mean_scores)[-15:][::-1]
-                
-                for i in top_indices:
-                    if i < len(model_manager.yamnet_labels):
-                        sounds[model_manager.yamnet_labels[i]] = float(mean_scores[i])
-                        
-                print(f"🔊 Top sounds: {list(sounds.keys())[:5]}")
-            except Exception as e:
-                print(f"⚠️ YAMNet error: {e}")
+        print("🔊 Sounds...")
+        snd = yamnet.analyze(audio)
+        if snd["sounds"]:
+            print(f"🔊 {list(snd['sounds'].keys())[:5]}")
+        if snd["location_hints"]:
+            print(f"💡 {[h[0] for h in snd['location_hints'][:3]]}")
         
-        # Run analysis
-        print("🧠 Running analysis...")
-        result = analysis_engine.analyze(audio, text, sounds, force_basic=force_basic)
+        print("🧠 Analyzing...")
+        res = analyzer.analyze(trans, snd)
         
-        # Calculate processing time
-        processing_time = (time.time() - start_time) * 1000
+        history[rid] = {"trans": trans, "sounds": snd, "result": res}
+        if len(history) > 500:
+            del history[list(history.keys())[0]]
         
-        # Log for active learning
-        if model_manager.active_learning and model_manager.is_upgraded:
-            try:
-                model_manager.active_learning.log_prediction(
-                    audio_data=None,  # Don't store audio
-                    prediction=result,
-                    user_feedback=None
-                )
-            except:
-                pass
+        proc = (time.time() - start) * 1000
         
-        # Build response
         response = AnalysisResult(
-            location=result["location"],
-            location_confidence=result["location_confidence"],
-            situation=result["situation"],
-            situation_confidence=result["situation_confidence"],
-            is_emergency=result["is_emergency"],
-            emergency_probability=result["emergency_probability"],
-            overall_confidence=result["overall_confidence"],
-            transcribed_text=text,
-            detected_sounds=list(sounds.keys())[:10],
-            evidence=result["evidence"],
-            summary=result["summary"],
-            analysis_mode=result["analysis_mode"],
-            processing_time_ms=round(processing_time, 2),
-            request_id=request_id,
-            timestamp=datetime.now().isoformat()
+            location=res["location"],
+            location_confidence=res["location_confidence"],
+            situation=res["situation"],
+            situation_confidence=res["situation_confidence"],
+            is_emergency=res["is_emergency"],
+            emergency_probability=res["emergency_probability"],
+            overall_confidence=res["overall_confidence"],
+            transcribed_text=trans.get("text", ""),
+            text_reliable=trans.get("is_reliable", False),
+            detected_sounds=res["detected_sounds"],
+            evidence=res["evidence"],
+            summary=res["summary"],
+            processing_time_ms=round(proc, 1),
+            request_id=rid,
+            timestamp=datetime.now().isoformat(),
+            audio_duration=round(dur, 2)
         )
         
         print(f"\n✅ RESULT:")
-        print(f"   📍 Location: {response.location} ({response.location_confidence*100:.1f}%)")
-        print(f"   🎯 Situation: {response.situation} ({response.situation_confidence*100:.1f}%)")
-        print(f"   🚨 Emergency: {response.is_emergency} ({response.emergency_probability*100:.1f}%)")
-        print(f"   ⚡ Mode: {response.analysis_mode}")
-        print(f"   ⏱️ Time: {response.processing_time_ms:.0f}ms")
+        print(f"   📍 {response.location} ({response.location_confidence*100:.0f}%)")
+        print(f"   🎯 {response.situation} ({response.situation_confidence*100:.0f}%)")
+        print(f"   🚨 Emergency: {response.is_emergency}")
+        print(f"   ⏱️ {response.processing_time_ms:.0f}ms")
         print("="*60 + "\n")
         
         return response
@@ -916,135 +943,51 @@ async def analyze_audio(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"💥 ERROR: {e}")
+        print(f"💥 {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-        
+        raise HTTPException(500, str(e))
     finally:
-        # Cleanup
-        if os.path.exists(temp_filename):
-            try:
-                os.remove(temp_filename)
-            except:
-                pass
+        for f in [orig, wav]:
+            if os.path.exists(f):
+                try: os.remove(f)
+                except: pass
 
 
-@app.post("/analyze/stream", tags=["Analysis"])
-async def analyze_audio_stream(
-    file: UploadFile = File(...)
-):
-    """
-    Analyze audio with streaming updates (for long audio files).
-    Returns preliminary results quickly, then detailed analysis.
-    """
-    # Similar to /analyze but with progress updates
-    # Implementation would use WebSocket or Server-Sent Events
-    return await analyze_audio(file)
+@app.post("/feedback")
+async def feedback(req: FeedbackRequest):
+    if req.request_id not in history:
+        return {"status": "not_found"}
+    h = history[req.request_id]
+    if req.correct_location:
+        learning.learn('location', req.correct_location, h['trans'].get('text', ''),
+                      list(h['sounds'].get('sounds', {}).keys()))
+    if req.correct_situation:
+        learning.learn('situation', req.correct_situation, h['trans'].get('text', ''),
+                      list(h['sounds'].get('sounds', {}).keys()))
+    return {"status": "learned", "corrections": learning.corrections}
 
 
-@app.post("/feedback", tags=["Learning"])
-async def submit_feedback(feedback: FeedbackRequest):
-    """
-    Submit feedback for a previous analysis.
-    Used for active learning to improve the model.
-    """
-    if not model_manager.active_learning:
-        return {"status": "feedback_recorded", "note": "Active learning not enabled"}
-    
-    try:
-        # Record feedback
-        model_manager.active_learning.query_history.append({
-            "request_id": feedback.request_id,
-            "feedback": {
-                "correct_location": feedback.correct_location,
-                "correct_situation": feedback.correct_situation,
-                "was_emergency": feedback.was_emergency,
-                "comments": feedback.comments
-            },
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return {
-            "status": "feedback_recorded",
-            "request_id": feedback.request_id,
-            "message": "Thank you for your feedback! This will help improve the model."
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not save feedback: {str(e)}")
+@app.get("/stats")
+async def stats():
+    return {"version": "4.1.0", "analyses": len(history), 
+            "models": {"whisper": whisper.loaded, "yamnet": yamnet.loaded},
+            "corrections": learning.corrections}
 
 
-@app.get("/stats", tags=["General"])
-async def get_stats():
-    """Get system statistics and performance metrics."""
-    stats = {
-        "total_analyses": len(analysis_engine.analysis_history) if analysis_engine else 0,
-        "model_mode": "upgraded" if model_manager.is_upgraded else "basic",
-        "models_status": {
-            "whisper": "loaded" if model_manager.whisper else "not loaded",
-            "yamnet": "loaded" if model_manager.yamnet else "not loaded",
-            "scene_classifier": "loaded" if model_manager.scene_classifier else "not loaded",
-            "audio_transformer": "loaded" if model_manager.audio_transformer else "not loaded",
-            "fusion_network": "loaded" if model_manager.fusion_network else "not loaded",
-        }
-    }
-    
-    if model_manager.active_learning:
-        al_stats = model_manager.active_learning.get_improvement_stats()
-        stats["active_learning"] = al_stats
-        
-    return stats
+# Auth mock
+@app.post("/login")
+async def login(d: dict): return {"token": uuid.uuid4().hex[:16]}
+@app.post("/register") 
+async def register(d: dict): return {"status": "ok"}
+@app.post("/save_history")
+async def save_hist(d: dict): return {"id": uuid.uuid4().hex[:8]}
 
 
 # ==============================
-# 🔒 MOCK AUTH ENDPOINTS
+# 🏃 RUN
 # ==============================
-
-@app.post("/login", tags=["Auth"])
-async def login_mock(data: dict):
-    """Mock login endpoint for frontend compatibility."""
-    return {
-        "token": f"mock-token-{uuid.uuid4().hex[:8]}",
-        "email": data.get("email", "user@auralis.ai"),
-        "expires_in": 3600
-    }
-
-
-@app.post("/register", tags=["Auth"])
-async def register_mock(data: dict):
-    """Mock register endpoint for frontend compatibility."""
-    return {
-        "status": "success",
-        "message": "User registered successfully",
-        "email": data.get("email", "user@auralis.ai")
-    }
-
-
-@app.post("/save_history", tags=["Auth"])
-async def save_history_mock(data: dict):
-    """Mock save history endpoint for frontend compatibility."""
-    return {
-        "status": "saved",
-        "id": str(uuid.uuid4())[:8]
-    }
-
-
-# ==============================
-# 🏃 RUN SERVER
-# ==============================
-
 if __name__ == "__main__":
     import uvicorn
-    
-    print("\n" + "="*60)
-    print("🚀 STARTING AURALIS ML SERVER")
-    print("="*60)
-    
-    uvicorn.run(
-        "main:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=False,  # Set True for development
-        workers=1,
-        log_level="info"
-    )
+    print("\n🚀 Starting Auralis v4.1...\n")
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, log_level="info")
