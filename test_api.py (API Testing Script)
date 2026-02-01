@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # ==============================
-# 📄 test_api.py
-# ==============================
-# Test the Auralis API endpoints
+# 📄 test_api.py — Auralis v5.0
 # ==============================
 
 import requests
@@ -14,128 +12,144 @@ BASE_URL = "http://127.0.0.1:8000"
 
 
 def test_health():
-    """Test health endpoint."""
     print("\n🔍 Testing /health...")
     try:
-        response = requests.get(f"{BASE_URL}/health")
-        if response.status_code == 200:
-            data = response.json()
+        r = requests.get(f"{BASE_URL}/health")
+        if r.status_code == 200:
+            data = r.json()
             print(f"   ✅ Status: {data['status']}")
             print(f"   ✅ Version: {data['version']}")
             print(f"   ✅ Upgraded Mode: {data['upgraded_mode']}")
             return True
-        else:
-            print(f"   ❌ Status Code: {response.status_code}")
-            return False
+        print(f"   ❌ Status Code: {r.status_code}")
+        return False
     except requests.exceptions.ConnectionError:
         print("   ❌ Connection failed. Is the server running?")
         return False
 
 
 def test_labels():
-    """Test labels endpoint."""
     print("\n🔍 Testing /labels...")
     try:
-        response = requests.get(f"{BASE_URL}/labels")
-        if response.status_code == 200:
-            data = response.json()
+        r = requests.get(f"{BASE_URL}/labels")
+        if r.status_code == 200:
+            data = r.json()
             print(f"   ✅ Locations: {data['num_locations']}")
             print(f"   ✅ Situations: {data['num_situations']}")
             return True
-        else:
-            print(f"   ❌ Status Code: {response.status_code}")
-            return False
+        print(f"   ❌ Status Code: {r.status_code}")
+        return False
     except Exception as e:
         print(f"   ❌ Error: {e}")
         return False
 
 
 def test_analyze(audio_file: str = None):
-    """Test analyze endpoint."""
     print("\n🔍 Testing /analyze...")
-    
-    if audio_file and os.path.exists(audio_file):
-        print(f"   Using file: {audio_file}")
-        
-        try:
-            with open(audio_file, 'rb') as f:
-                files = {'file': (os.path.basename(audio_file), f, 'audio/wav')}
-                response = requests.post(f"{BASE_URL}/analyze", files=files)
-                
-            if response.status_code == 200:
-                data = response.json()
-                print(f"   ✅ Location: {data['location']} ({data['location_confidence']*100:.1f}%)")
-                print(f"   ✅ Situation: {data['situation']} ({data['situation_confidence']*100:.1f}%)")
-                print(f"   ✅ Emergency: {data['is_emergency']}")
-                print(f"   ✅ Mode: {data['analysis_mode']}")
-                print(f"   ✅ Time: {data['processing_time_ms']:.0f}ms")
-                return True
-            else:
-                print(f"   ❌ Status Code: {response.status_code}")
-                print(f"   ❌ Response: {response.text}")
-                return False
-                
-        except Exception as e:
-            print(f"   ❌ Error: {e}")
-            return False
-    else:
-        print("   ⚠️ No audio file provided. Skipping analysis test.")
+    if not audio_file or not os.path.exists(audio_file):
+        print("   ⚠️ No audio file provided. Skipping.")
         print("   Usage: python test_api.py path/to/audio.wav")
         return True
 
+    print(f"   Using file: {audio_file}")
+    try:
+        with open(audio_file, 'rb') as f:
+            files = {'file': (os.path.basename(audio_file), f, 'audio/wav')}
+            r = requests.post(f"{BASE_URL}/analyze", files=files, timeout=120)
+
+        if r.status_code != 200:
+            print(f"   ❌ Status: {r.status_code}")
+            print(f"   ❌ Body: {r.text[:300]}")
+            return False
+
+        d = r.json()
+
+        # Core
+        print(f"   ✅ Location:   {d['location']} ({d['location_confidence']*100:.1f}%)")
+        print(f"   ✅ Situation:  {d['situation']} ({d['situation_confidence']*100:.1f}%)")
+        print(f"   ✅ Emergency:  {d['is_emergency']}")
+        print(f"   ✅ Mode:       {d['analysis_mode']}")
+
+        # Emotions
+        emo = d.get("emotions", {})
+        print(f"   ✅ Emotion:    {emo.get('primary_emotion','?')} (intensity {emo.get('intensity','?')})")
+        print(f"      Micro:     {emo.get('micro_emotions', {})}")
+
+        # Speaker confidence
+        sc = d.get("speaker_confidence", {})
+        print(f"   ✅ Speaker:    {sc.get('score','?')}/10 — {sc.get('level','?')}")
+        print(f"      Breakdown: {sc.get('breakdown', {})}")
+
+        # Quality
+        q = d.get("quality", {})
+        print(f"   ✅ Quality:    {q.get('score','?')}/10")
+        print(f"      Feedback:  {q.get('feedback', [])}")
+
+        # Semantic
+        sem = d.get("semantic_analysis", {})
+        print(f"   ✅ Intent:     {sem.get('intent','?')} ({sem.get('intent_confidence','?')})")
+        print(f"      Audience:  {sem.get('target_audience','?')}")
+        print(f"      Urgency:   {sem.get('urgency_level','?')}")
+        print(f"      Topics:    {sem.get('topics', [])}")
+        print(f"      Actions:   {sem.get('action_items', [])}")
+
+        # Language
+        lang = d.get("language", {})
+        print(f"   ✅ Language:   {lang.get('name','?')} ({lang.get('code','?')})")
+
+        # Evidence
+        print(f"   ✅ Evidence:   {d.get('evidence', [])}")
+
+        # Timing
+        print(f"   ✅ Time:       {d['processing_time_ms']:.0f}ms")
+
+        return True
+
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return False
+
 
 def test_feedback():
-    """Test feedback endpoint."""
     print("\n🔍 Testing /feedback...")
     try:
         data = {
             "request_id": "test123",
             "correct_location": "Airport Terminal",
-            "correct_situation": "Boarding/Departure",
-            "was_emergency": False,
-            "comments": "Test feedback"
+            "correct_situation": "Boarding/Departure"
         }
-        response = requests.post(f"{BASE_URL}/feedback", json=data)
-        
-        if response.status_code == 200:
-            result = response.json()
-            print(f"   ✅ Status: {result['status']}")
+        r = requests.post(f"{BASE_URL}/feedback", json=data)
+        if r.status_code == 200:
+            print(f"   ✅ Status: {r.json()['status']}")
             return True
-        else:
-            print(f"   ❌ Status Code: {response.status_code}")
-            return False
+        print(f"   ❌ Status Code: {r.status_code}")
+        return False
     except Exception as e:
         print(f"   ❌ Error: {e}")
         return False
 
 
 def run_all_tests(audio_file: str = None):
-    """Run all API tests."""
     print("\n" + "="*60)
-    print("🧪 AURALIS API TEST SUITE")
+    print("🧪 AURALIS v5.0 API TEST SUITE")
     print("="*60)
-    
+
     results = {
-        "health": test_health(),
-        "labels": test_labels(),
-        "analyze": test_analyze(audio_file),
+        "health":   test_health(),
+        "labels":   test_labels(),
+        "analyze":  test_analyze(audio_file),
         "feedback": test_feedback(),
     }
-    
+
     print("\n" + "="*60)
     print("📊 TEST RESULTS")
     print("="*60)
-    
     passed = sum(results.values())
-    total = len(results)
-    
-    for test, result in results.items():
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"   {test}: {status}")
-    
+    total  = len(results)
+    for test, ok in results.items():
+        print(f"   {test}: {'✅ PASS' if ok else '❌ FAIL'}")
     print(f"\n   Total: {passed}/{total} passed")
     print("="*60 + "\n")
-    
     return passed == total
 
 
