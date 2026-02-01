@@ -1,0 +1,140 @@
+{
+    "version": "1.0.0",
+    "description": "Entity extraction patterns for Auralis Ultimate",
+    "last_updated": "2024-01-15",
+    
+    "train_patterns": {
+        "indian_railways": [
+            "rajdhani",
+            "shatabdi",
+            "duronto",
+            "garib rath",
+            "sampark kranti",
+            "jan shatabdi",
+            "tejas",
+            "vande bharat",
+            "humsafar",
+            "antyodaya",
+            "gatimaan"
+        ],
+        "number_formats": [
+            "\\d{5}",
+            "\\d{4,5}\\s*(?:express|mail|superfast|local)"
+        ]
+    },
+    
+    "flight_patterns": {
+        "indian_airlines": {
+            "AI": "Air India",
+            "6E": "IndiGo",
+            "SG": "SpiceJet",
+            "UK": "Vistara",
+            "G8": "Go First",
+            "I5": "AirAsia India",
+            "QP": "Akasa Air"
+        },
+        "international_airlines": {
+            "EK": "Emirates",
+            "QR": "Qatar Airways",
+            "SQ": "Singapore Airlines",
+            "BA": "British Airways",
+            "LH": "Lufthansa",
+            "AF": "Air France",
+            "TK": "Turkish Airlines"
+        },
+        "number_formats": [
+            "[A-Z]{2}\\s*\\d{3,4}",
+            "[A-Z0-9]{2}\\s*\\d{3,4}"
+        ]
+    },
+    
+    "location_patterns": {
+        "platforms": [
+            "platform\\s*(?:number|no\\.?)?\\s*(\\d{1,2})",
+            "track\\s*(?:number|no\\.?)?\\s*(\\d{1,2})"
+        ],
+        "gates": [
+            "gate\\s*(?:number|no\\.?)?\\s*([A-Z]?\\d{1,3})",
+            "boarding\\s+gate\\s*([A-Z]?\\d{1,3})"
+        ],
+        "terminals": [
+            "terminal\\s*(?:number|no\\.?)?\\s*(\\d)",
+            "t(\\d)\\s+(?:terminal|building)"
+        ]
+    },
+    
+    "time_patterns": {
+        "12_hour": [
+            "\\d{1,2}[:.:]\\d{2}\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)",
+            "\\d{1,2}\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)"
+        ],
+        "24_hour": [
+            "\\d{2}[:.:]\\d{2}\\s*(?:hours?|hrs?)?",
+            "\\d{4}\\s*(?:hours?|hrs?)"
+        ],
+        "relative": [
+            "in\\s*(\\d+)\\s*(?:minutes?|mins?)",
+            "in\\s*(\\d+)\\s*(?:hours?|hrs?)",
+            "after\\s*(\\d+)\\s*(?:minutes?|mins?)"
+        ]
+    },
+    
+    "money_patterns": {
+        "inr": [
+            "(?:₹|rs\\.?|inr)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d{2})?)",
+            "(\\d+(?:,\\d{3})*(?:\\.\\d{2})?)\\s*(?:rupees?|rs\\.?)"
+        ],
+        "usd": [
+            "(?:\\$|usd)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d{2})?)"
+        ]
+    },
+    
+    "contact_patterns": {
+        "phone_india": [
+            "\\+91\\s*\\d{10}",
+            "\\d{10}",
+            "\\d{3}[-.]?\\d{3}[-.]?\\d{4}"
+        ],
+        "emergency": [
+            "100",
+            "101",
+            "102",
+            "108",
+            "112",
+            "1091",
+            "1098"
+        ]
+    },
+    
+    "indian_names": {
+        "titles": ["Shri", "Smt", "Kumar", "Dr", "Prof"],
+        "common_surnames": [
+            "Sharma", "Singh", "Patel", "Gupta", "Kumar",
+            "Verma", "Joshi", "Rao", "Reddy", "Nair",
+            "Menon", "Iyer", "Iyengar", "Chatterjee", "Banerjee",
+            "Mukherjee", "Das", "Bose", "Sen", "Ghosh"
+        ]
+    },
+    
+    "station_names": {
+        "major_railway": [
+            "New Delhi",
+            "Mumbai Central",
+            "Chennai Central",
+            "Howrah",
+            "Bangalore City",
+            "Secunderabad",
+            "Ahmedabad",
+            "Pune",
+            "Jaipur",
+            "Lucknow"
+        ],
+        "major_airports": [
+            "Indira Gandhi International",
+            "Chhatrapati Shivaji Maharaj International",
+            "Kempegowda International",
+            "Rajiv Gandhi International",
+            "Netaji Subhas Chandra Bose International"
+        ]
+    }
+}

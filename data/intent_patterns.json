@@ -1,0 +1,152 @@
+{
+    "version": "1.0.0",
+    "description": "Intent detection patterns for Auralis Ultimate",
+    "last_updated": "2024-01-15",
+    
+    "intents": {
+        "announcement": {
+            "high_confidence": [
+                "attention\\s+(?:please|all|passengers)",
+                "(?:ladies\\s+and\\s+)?gentlemen",
+                "(?:we\\s+)?(?:are\\s+)?(?:pleased\\s+)?to\\s+announce",
+                "this\\s+is\\s+(?:a|an)\\s+(?:public\\s+)?announcement",
+                "(?:may\\s+i\\s+have\\s+)?your\\s+attention\\s+please",
+                "(?:passengers|customers|guests)\\s+are\\s+(?:informed|requested)",
+                "kripya\\s+dhyan\\s+dijiye",
+                "yatriyon\\s+se\\s+anurodh"
+            ],
+            "medium_confidence": [
+                "please\\s+note",
+                "kindly\\s+(?:note|be\\s+informed)",
+                "for\\s+your\\s+(?:information|attention)",
+                "we\\s+(?:would\\s+like\\s+to\\s+)?inform"
+            ]
+        },
+        
+        "instruction": {
+            "high_confidence": [
+                "(?:please\\s+)?(?:proceed|go|move|come)\\s+to",
+                "you\\s+(?:must|should|need\\s+to|have\\s+to)",
+                "(?:do\\s+not|don't|never)\\s+\\w+",
+                "(?:make\\s+sure|ensure)\\s+(?:to|that)",
+                "(?:follow|take)\\s+(?:the|these)\\s+(?:steps|instructions)"
+            ],
+            "medium_confidence": [
+                "(?:please|kindly)\\s+\\w+",
+                "(?:keep|remain|stay)\\s+\\w+",
+                "step\\s+(?:back|forward|aside)"
+            ]
+        },
+        
+        "warning": {
+            "high_confidence": [
+                "(?:warning|caution|danger|alert)",
+                "(?:be\\s+)?careful",
+                "(?:emergency|urgent)\\s+\\w+",
+                "for\\s+your\\s+(?:safety|security)",
+                "(?:hazard|risk|threat)"
+            ],
+            "medium_confidence": [
+                "(?:do\\s+not|don't|avoid)\\s+\\w+",
+                "(?:prohibited|forbidden|not\\s+allowed)"
+            ]
+        },
+        
+        "emergency": {
+            "high_confidence": [
+                "(?:emergency|fire|help)",
+                "(?:evacuate|escape)\\s+(?:now|immediately)?",
+                "(?:call|dial)\\s+(?:911|100|101|102|108|112)",
+                "(?:someone\\s+)?(?:needs?\\s+help|hurt|injured)",
+                "(?:medical\\s+)?emergency"
+            ]
+        },
+        
+        "question": {
+            "high_confidence": [
+                "\\?$",
+                "^(?:what|where|when|why|how|who|which)",
+                "^(?:is|are|was|were|do|does|did|can|could|will|would)"
+            ],
+            "medium_confidence": [
+                "(?:can|could)\\s+you\\s+(?:tell|help)",
+                "(?:do\\s+you\\s+know|any\\s+idea)",
+                "(?:i\\s+)?(?:wonder|wondering)"
+            ]
+        },
+        
+        "request": {
+            "high_confidence": [
+                "(?:can|could|would)\\s+you\\s+(?:please)?",
+                "(?:i\\s+)?(?:need|want|would\\s+like)",
+                "(?:requesting|request\\s+for)"
+            ],
+            "medium_confidence": [
+                "(?:please|kindly)\\s+(?:help|assist)",
+                "(?:if\\s+possible|if\\s+you\\s+can)"
+            ]
+        },
+        
+        "greeting": {
+            "high_confidence": [
+                "(?:hello|hi|hey|good\\s+(?:morning|afternoon|evening|day))",
+                "(?:welcome\\s+to|welcome\\s+aboard|welcome\\s+back)",
+                "(?:greetings|namaste|namaskar|namaskaram)"
+            ]
+        },
+        
+        "farewell": {
+            "high_confidence": [
+                "(?:goodbye|bye|farewell|see\\s+you)",
+                "(?:thank\\s+you|thanks)\\s+(?:for|and)",
+                "(?:have\\s+a\\s+)?(?:good|nice|safe)\\s+(?:day|trip|journey|flight)"
+            ]
+        },
+        
+        "information": {
+            "medium_confidence": [
+                "(?:the|this)\\s+(?:train|flight|bus)\\s+(?:is|will)",
+                "(?:arriving|departing|scheduled)\\s+(?:at|for)",
+                "(?:located|available|open)\\s+(?:at|in|on)",
+                "(?:the\\s+)?(?:time|temperature|weather)\\s+is"
+            ]
+        }
+    },
+    
+    "content_types": {
+        "travel_announcement": [
+            "(?:train|flight|bus|metro)\\s+(?:number|no\\.?)",
+            "(?:platform|gate|terminal)\\s+(?:number|no\\.?)?\\s*\\d+",
+            "(?:arriving|departing|boarding|delayed)",
+            "(?:passengers|travelers)"
+        ],
+        "safety_instruction": [
+            "(?:safety|security|emergency)",
+            "(?:evacuation|fire\\s+exit|assembly\\s+point)",
+            "(?:do\\s+not|prohibited|forbidden)",
+            "(?:for\\s+your\\s+safety|safety\\s+first)"
+        ],
+        "commercial_message": [
+            "(?:sale|discount|offer|buy|purchase)",
+            "(?:limited\\s+time|special\\s+offer|exclusive)",
+            "(?:call\\s+now|order\\s+now|visit\\s+us)",
+            "(?:free|bonus|gift|prize)"
+        ]
+    },
+    
+    "urgency_indicators": {
+        "critical": ["emergency", "immediately", "now", "urgent", "critical", "evacuate"],
+        "high": ["as\\s+soon\\s+as", "quickly", "hurry", "right\\s+away", "asap"],
+        "medium": ["soon", "shortly", "please", "kindly", "requested"],
+        "low": ["when\\s+possible", "at\\s+your\\s+convenience", "later", "eventually"]
+    },
+    
+    "audience_indicators": {
+        "passengers": ["passengers", "travelers", "commuters", "yatri", "yatriyon"],
+        "customers": ["customers", "shoppers", "buyers", "guests", "visitors"],
+        "employees": ["employees", "staff", "workers", "colleagues", "team"],
+        "students": ["students", "learners", "class", "batch"],
+        "patients": ["patients", "visitors", "attendants"],
+        "general_public": ["everyone", "all", "public", "citizens", "people"]
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "boosts": {
+    "location": {},
+    "situation": {}
+  },
+  "corrections": 0,
+  "location_corrections": 0,
+  "situation_corrections": 0,
+  "emotion_corrections": 0,
+  "last_saved": "2026-01-31T23:49:05.809037",
+  "version": "5.0.0"
+}
