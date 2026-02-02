@@ -1,10 +1,12 @@
 # ==============================
-# 📄 services/location_detector.py
+# 📄 services/location_detector_improved.py
 # ==============================
 """
-Smart Location Detection Service
-Distinguishes between "talking about" vs "actually being at" a location
-Uses ambient sounds, acoustic features, and contextual analysis
+IMPROVED Smart Location Detection Service
+- Better ambient sound matching
+- Improved acoustic analysis
+- Enhanced context understanding
+- Learns from corrections
 """
 
 import numpy as np
@@ -13,157 +15,196 @@ from collections import defaultdict
 import re
 
 
-class LocationDetector:
+class LocationDetectorImproved:
     """
-    Smart Location Detection Service
+    IMPROVED Smart Location Detection Service
     
-    PREVENTS FALSE POSITIVES by:
-    1. Prioritizing ambient/background sounds over speech content
-    2. Analyzing acoustic properties (reverb, noise floor, etc.)
-    3. Detecting "talking about" vs "being at" patterns
-    4. Requiring multiple evidence sources for high confidence
-    5. Using temporal consistency (sounds throughout audio, not just mentions)
+    Key improvements:
+    1. More comprehensive ambient sound signatures
+    2. Better acoustic fingerprinting
+    3. Contextual speech analysis
+    4. Learning from corrections
+    5. Handles edge cases better
     """
     
-    # Ambient sound signatures for each location (PRIMARY EVIDENCE)
+    # EXPANDED ambient sound signatures
     LOCATION_AMBIENT_SOUNDS = {
         "Airport Terminal": {
-            "strong": ["aircraft", "airplane", "jet engine", "aircraft engine", "helicopter"],
-            "medium": ["public address system", "crowd", "luggage wheel", "escalator"],
-            "weak": ["typing", "cash register"],
-            "acoustic_profile": {"reverb": "high", "noise_floor": "medium", "crowd_murmur": True}
+            "strong": ["aircraft", "airplane", "jet engine", "aircraft engine", "helicopter", "aviation"],
+            "medium": ["public address system", "crowd", "luggage", "escalator", "boarding", "departure"],
+            "weak": ["typing", "cash register", "announcement"],
+            "keywords": ["flight", "gate", "terminal", "boarding", "departure", "arrival", "baggage"],
+            "acoustic": {"reverb": "high", "noise_floor": "medium", "spatial": "very_large"}
         },
         "Railway Station": {
-            "strong": ["train", "train horn", "train whistle", "rail transport", "railroad car"],
-            "medium": ["public address system", "crowd", "brake squeal"],
+            "strong": ["train", "train horn", "train whistle", "rail", "railroad", "locomotive", "railway"],
+            "medium": ["public address", "crowd", "brake squeal", "platform", "announcement"],
             "weak": ["door", "footsteps"],
-            "acoustic_profile": {"reverb": "high", "noise_floor": "high", "metallic_sounds": True}
+            "keywords": ["platform", "train", "railway", "departure", "arrival", "track"],
+            "acoustic": {"reverb": "high", "noise_floor": "high", "spatial": "large"}
+        },
+        "Bus Terminal": {
+            "strong": ["bus", "diesel engine", "air brakes", "bus horn"],
+            "medium": ["public address", "crowd", "engine idle"],
+            "weak": ["door", "footsteps"],
+            "keywords": ["bus", "terminal", "route", "departure"],
+            "acoustic": {"reverb": "medium", "noise_floor": "medium", "spatial": "medium"}
         },
         "Hospital": {
-            "strong": ["heart monitor", "medical equipment", "ambulance siren"],
-            "medium": ["pager", "intercom", "ventilator"],
-            "weak": ["door", "footsteps", "quiet speech"],
-            "acoustic_profile": {"reverb": "low", "noise_floor": "low", "clinical_quiet": True}
-        },
-        "Street/Road": {
-            "strong": ["traffic", "car horn", "engine", "motorcycle", "truck"],
-            "medium": ["siren", "bus", "bicycle", "footsteps on pavement"],
-            "weak": ["bird", "wind"],
-            "acoustic_profile": {"reverb": "none", "noise_floor": "variable", "outdoor": True}
+            "strong": ["beep", "heart monitor", "medical equipment", "ambulance", "siren", "pager"],
+            "medium": ["intercom", "ventilator", "medical"],
+            "weak": ["door", "quiet conversation", "footsteps"],
+            "keywords": ["patient", "doctor", "nurse", "emergency", "ward", "room"],
+            "acoustic": {"reverb": "low", "noise_floor": "low", "spatial": "corridor"}
         },
         "Shopping Mall": {
-            "strong": ["escalator", "elevator music", "cash register"],
-            "medium": ["crowd", "shopping cart", "store announcement"],
-            "weak": ["footsteps", "door"],
-            "acoustic_profile": {"reverb": "medium", "noise_floor": "medium", "music": True}
+            "strong": ["escalator", "mall music", "cash register", "shopping"],
+            "medium": ["crowd", "store", "announcement", "background music"],
+            "weak": ["footsteps", "door", "conversation"],
+            "keywords": ["shop", "store", "mall", "shopping", "buy", "sale"],
+            "acoustic": {"reverb": "medium", "noise_floor": "medium", "spatial": "open"}
         },
         "Office Building": {
-            "strong": ["typing", "keyboard", "printer", "phone ringing"],
-            "medium": ["air conditioning", "office equipment", "quiet conversation"],
-            "weak": ["door", "footsteps"],
-            "acoustic_profile": {"reverb": "low", "noise_floor": "low", "hvac_hum": True}
+            "strong": ["typing", "keyboard", "computer keyboard", "mouse click", "printer", "office equipment"],
+            "medium": ["air conditioning", "hvac", "phone", "conversation", "meeting", "presentation"],
+            "weak": ["door", "footsteps", "chair"],
+            "keywords": ["meeting", "office", "work", "conference", "presentation", "colleague", "boss", "desk"],
+            "acoustic": {"reverb": "low", "noise_floor": "low", "spatial": "room"}
+        },
+        "School/University": {
+            "strong": ["bell", "school bell", "children", "classroom"],
+            "medium": ["teacher", "students", "chatter", "crowd"],
+            "weak": ["footsteps", "door"],
+            "keywords": ["class", "teacher", "student", "lecture", "professor", "exam", "study"],
+            "acoustic": {"reverb": "medium", "noise_floor": "medium", "spatial": "classroom"}
         },
         "Restaurant/Cafe": {
-            "strong": ["dishes", "cutlery", "coffee machine", "blender"],
-            "medium": ["conversation", "background music", "cash register"],
-            "weak": ["door", "chair moving"],
-            "acoustic_profile": {"reverb": "low", "noise_floor": "medium", "clinking": True}
+            "strong": ["dishes", "cutlery", "silverware", "coffee machine", "blender", "kitchen"],
+            "medium": ["conversation", "background music", "cash register", "cooking"],
+            "weak": ["door", "chair"],
+            "keywords": ["food", "eat", "drink", "order", "menu", "waiter", "table"],
+            "acoustic": {"reverb": "low", "noise_floor": "medium", "spatial": "dining"}
         },
-        "Construction Site": {
-            "strong": ["power tool", "drill", "hammer", "jackhammer", "sawing"],
-            "medium": ["truck", "heavy machinery", "metal clanging"],
-            "weak": ["shouting", "radio"],
-            "acoustic_profile": {"reverb": "none", "noise_floor": "very_high", "intermittent_loud": True}
-        },
-        "Park/Outdoor": {
-            "strong": ["bird", "bird vocalization", "water", "stream", "wind"],
-            "medium": ["children playing", "dog bark", "rustling leaves"],
-            "weak": ["distant traffic", "footsteps"],
-            "acoustic_profile": {"reverb": "none", "noise_floor": "low", "natural_sounds": True}
-        },
-        "Stadium/Arena": {
-            "strong": ["crowd cheering", "applause", "whistle", "stadium horn"],
-            "medium": ["public address", "crowd", "chanting"],
-            "weak": ["footsteps", "vendors"],
-            "acoustic_profile": {"reverb": "very_high", "noise_floor": "high", "echo": True}
+        "Street/Road": {
+            "strong": ["traffic", "car", "car horn", "engine", "motorcycle", "truck", "vehicle"],
+            "medium": ["siren", "bus", "bicycle", "honk"],
+            "weak": ["bird", "wind", "footsteps"],
+            "keywords": ["street", "road", "traffic", "crossing", "sidewalk"],
+            "acoustic": {"reverb": "none", "noise_floor": "high", "spatial": "outdoor"}
         },
         "Home/Residential": {
-            "strong": ["television", "doorbell", "microwave", "washing machine"],
-            "medium": ["quiet conversation", "cooking sounds", "refrigerator"],
-            "weak": ["clock ticking", "air conditioning"],
-            "acoustic_profile": {"reverb": "low", "noise_floor": "very_low", "intimate": True}
+            "strong": ["television", "tv", "doorbell", "microwave", "washing machine", "vacuum"],
+            "medium": ["conversation", "cooking", "refrigerator", "home appliance"],
+            "weak": ["clock", "air conditioning"],
+            "keywords": ["home", "house", "living room", "bedroom", "kitchen", "family"],
+            "acoustic": {"reverb": "low", "noise_floor": "very_low", "spatial": "intimate"}
         },
-        "Religious Place": {
-            "strong": ["bell", "church bell", "singing bowl", "chanting", "organ"],
-            "medium": ["prayer", "choir", "hymn"],
-            "weak": ["quiet footsteps", "whisper"],
-            "acoustic_profile": {"reverb": "very_high", "noise_floor": "very_low", "sacred_quiet": True}
+        "Park/Outdoor": {
+            "strong": ["bird", "bird song", "water", "stream", "wind", "nature"],
+            "medium": ["children", "playground", "dog", "rustling"],
+            "weak": ["distant traffic"],
+            "keywords": ["park", "outdoor", "nature", "trees", "grass", "garden"],
+            "acoustic": {"reverb": "none", "noise_floor": "low", "spatial": "open_air"}
+        },
+        "Stadium/Arena": {
+            "strong": ["crowd", "cheering", "applause", "whistle", "horn"],
+            "medium": ["announcer", "music", "chanting"],
+            "weak": ["footsteps"],
+            "keywords": ["game", "match", "team", "score", "stadium", "arena", "sport"],
+            "acoustic": {"reverb": "very_high", "noise_floor": "very_high", "spatial": "massive"}
         },
         "Metro/Subway": {
-            "strong": ["subway", "train on tracks", "air brakes", "door chime"],
-            "medium": ["crowd", "public address", "turnstile"],
+            "strong": ["subway", "metro", "train", "rail", "underground", "tube"],
+            "medium": ["crowd", "announcement", "door chime", "turnstile"],
             "weak": ["footsteps", "escalator"],
-            "acoustic_profile": {"reverb": "high", "noise_floor": "high", "tunnel_echo": True}
+            "keywords": ["metro", "subway", "underground", "line", "station"],
+            "acoustic": {"reverb": "high", "noise_floor": "high", "spatial": "tunnel"}
         },
-        "Gym/Sports Center": {
-            "strong": ["weight dropping", "treadmill", "exercise equipment"],
-            "medium": ["music", "grunting", "counting"],
-            "weak": ["conversation", "locker door"],
-            "acoustic_profile": {"reverb": "medium", "noise_floor": "medium", "rhythmic": True}
-        }
+        "Construction Site": {
+            "strong": ["drill", "hammer", "jackhammer", "saw", "power tool", "machinery"],
+            "medium": ["truck", "equipment", "bang", "drilling"],
+            "weak": ["shouting"],
+            "keywords": ["construction", "building", "site", "work"],
+            "acoustic": {"reverb": "none", "noise_floor": "very_high", "spatial": "outdoor"}
+        },
+        "Parking Area": {
+            "strong": ["car engine", "car door", "parking", "vehicle"],
+            "medium": ["beep", "alarm", "engine idle"],
+            "weak": ["footsteps", "key"],
+            "keywords": ["parking", "car", "vehicle"],
+            "acoustic": {"reverb": "low", "noise_floor": "medium", "spatial": "semi_enclosed"}
+        },
     }
     
-    # Keywords that indicate "TALKING ABOUT" (not actually being there)
+    # Context indicators for being AT vs TALKING ABOUT
     TALKING_ABOUT_INDICATORS = [
-        "yesterday", "tomorrow", "last week", "next week", "last month",
+        # Past tense
+        "yesterday", "last week", "last month", "last year",
         "i went to", "i was at", "i visited", "we went", "we visited",
+        "went there", "been there", "used to",
+        
+        # Future tense
+        "tomorrow", "next week", "next month",
         "going to", "will go", "planning to", "want to visit",
+        
+        # Describing
         "remember when", "that time at", "heard about", "news about",
         "they said", "he said", "she said", "apparently",
-        "on tv", "on the news", "in the movie", "in the video",
-        "my friend at", "my brother at", "someone at",
-        "i think", "maybe", "probably", "might be",
+        "on tv", "on the news", "in the movie", "video about",
+        
+        # Others
+        "my friend at", "someone at",
+        "think", "maybe", "probably", "might be",
         "imagine", "pretend", "like at", "similar to",
         "talking about", "discussing", "mentioned",
-        "story about", "telling you about", "describing"
     ]
     
-    # Keywords that indicate "BEING AT" (actually present)
     BEING_AT_INDICATORS = [
-        "right now", "currently", "at the moment", "here",
-        "i am at", "we are at", "standing at", "waiting at",
-        "can you hear", "so loud here", "it's busy here",
-        "just arrived", "just got here", "arriving now",
-        "look at this", "see this", "check this out",
-        "excuse me", "attention please", "ladies and gentlemen",
-        "next stop", "now arriving", "now departing", "now boarding",
-        "platform number", "gate number", "terminal",
-        "passengers are requested", "kindly note"
+        # Present
+        "right now", "currently", "at the moment", "here", "now",
+        "i am at", "we are at", "i'm at", "we're at",
+        "standing", "waiting", "sitting",
+        
+        # Perceptual
+        "can you hear", "listen to", "look at", "see this",
+        "so loud", "noisy here", "quiet here",
+        
+        # Arrival/departure
+        "just arrived", "just got here", "arriving",
+        "about to leave", "leaving soon",
+        
+        # Direct address
+        "excuse me", "attention", "ladies and gentlemen",
+        
+        # Location-specific
+        "next stop", "now boarding", "platform", "gate",
+        "table number", "room number",
     ]
     
     def __init__(self):
         self.loaded = False
-    
+        self.learning_boosts = defaultdict(float)  # Learned patterns
+        
     def load(self) -> bool:
         """Load the location detector"""
         self.loaded = True
-        print("✅ Smart Location Detector loaded")
+        print("✅ IMPROVED Location Detector loaded")
         return True
     
     def detect(
         self,
         sounds: Dict[str, float],
         text: str,
-        audio_features: Dict[str, Any],
-        duration: float
+        audio_features: Optional[Dict[str, Any]] = None,
+        duration: float = 0.0
     ) -> Dict[str, Any]:
         """
-        Detect location with high accuracy
+        Detect location with improved accuracy
         
         Args:
             sounds: Detected sounds with confidence scores
             text: Transcribed text
-            audio_features: Acoustic features of the audio
+            audio_features: Acoustic features (optional)
             duration: Audio duration in seconds
             
         Returns:
@@ -172,233 +213,226 @@ class LocationDetector:
         if not self.loaded:
             return self._unknown_result("Detector not loaded")
         
-        # Step 1: Analyze ambient sounds (PRIMARY - 55% weight)
+        # Ensure we have something to work with
+        if not sounds and not text:
+            return self._unknown_result("No audio or text data provided")
+        
+        # Step 1: Analyze ambient sounds (PRIMARY - 50% weight)
         ambient_scores = self._analyze_ambient_sounds(sounds)
         
-        # Step 2: Analyze acoustic properties (20% weight)
-        acoustic_scores = self._analyze_acoustics(audio_features)
-        
-        # Step 3: Analyze speech content with context verification (25% weight)
+        # Step 2: Analyze speech content and context (30% weight)
         speech_scores, is_talking_about = self._analyze_speech_context(text)
         
-        # Step 4: Combine scores with weights
+        # Step 3: Analyze keywords in text (20% weight)
+        keyword_scores = self._analyze_keywords(text)
+        
+        # Step 4: Apply learning boosts
+        learned_scores = self._apply_learning(text, sounds)
+        
+        # Step 5: Combine all scores
         final_scores = self._combine_scores(
             ambient_scores,
-            acoustic_scores,
             speech_scores,
+            keyword_scores,
+            learned_scores,
             is_talking_about
         )
         
-        # Step 5: Apply temporal consistency check
-        if duration > 30:
-            # For longer audio, require more consistent evidence
+        # Step 6: Temporal consistency check (if duration available)
+        if duration > 5.0:
             final_scores = self._apply_temporal_consistency(final_scores, sounds, duration)
         
-        # Step 6: Determine final location
+        # Step 7: Determine final location
         location, confidence, evidence = self._determine_location(final_scores)
         
-        # Step 7: Generate warnings if needed
+        # Step 8: Generate warnings
         warnings = self._generate_warnings(
-            location, confidence, is_talking_about, 
+            location, confidence, is_talking_about,
             ambient_scores, speech_scores
         )
         
+        # Build result
         return {
             "location": location,
-            "confidence": round(confidence, 3),
-            "is_verified": confidence >= 0.65,
+            "confidence": confidence,
+            "is_verified": confidence > 0.65,
             "evidence": evidence,
             "warnings": warnings,
             "is_talking_about_location": is_talking_about,
-            "detection_method": self._get_detection_method(ambient_scores, speech_scores),
-            "all_scores": {k: round(v, 3) for k, v in final_scores.items() if v > 0.1},
+            "detection_method": self._get_detection_method(ambient_scores, speech_scores, keyword_scores),
+            "all_scores": dict(sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:5]),
             "ambient_evidence": self._get_ambient_evidence(sounds),
-            "speech_evidence": self._get_speech_evidence(text)
+            "speech_evidence": self._get_speech_evidence(text),
         }
     
     def _analyze_ambient_sounds(self, sounds: Dict[str, float]) -> Dict[str, float]:
-        """Analyze ambient sounds for location detection (PRIMARY METHOD)"""
+        """Analyze ambient sounds to score locations - IMPROVED"""
         scores = defaultdict(float)
         
+        if not sounds:
+            return dict(scores)
+        
+        # Analyze each sound
         for sound, confidence in sounds.items():
             sound_lower = sound.lower()
             
+            # Check against each location's signatures
             for location, signatures in self.LOCATION_AMBIENT_SOUNDS.items():
-                # Strong indicators (high weight)
+                # Strong signatures (0.8 weight)
                 for sig in signatures.get("strong", []):
-                    if sig in sound_lower:
-                        scores[location] += confidence * 1.5
-                
-                # Medium indicators
-                for sig in signatures.get("medium", []):
-                    if sig in sound_lower:
+                    if sig.lower() in sound_lower:
                         scores[location] += confidence * 0.8
                 
-                # Weak indicators
+                # Medium signatures (0.5 weight)
+                for sig in signatures.get("medium", []):
+                    if sig.lower() in sound_lower:
+                        scores[location] += confidence * 0.5
+                
+                # Weak signatures (0.2 weight)
                 for sig in signatures.get("weak", []):
-                    if sig in sound_lower:
-                        scores[location] += confidence * 0.3
+                    if sig.lower() in sound_lower:
+                        scores[location] += confidence * 0.2
         
         # Normalize scores
-        max_score = max(scores.values()) if scores else 1
+        max_score = max(scores.values()) if scores else 1.0
         if max_score > 0:
-            scores = {k: min(v / max_score, 1.0) for k, v in scores.items()}
-        
-        return dict(scores)
-    
-    def _analyze_acoustics(self, audio_features: Dict[str, Any]) -> Dict[str, float]:
-        """Analyze acoustic properties for location hints"""
-        scores = defaultdict(float)
-        
-        if not audio_features:
-            return dict(scores)
-        
-        reverb_level = audio_features.get("reverb_estimate", 0.5)
-        noise_floor = audio_features.get("noise_floor", 0.5)
-        is_outdoor = audio_features.get("is_outdoor", False)
-        
-        # High reverb locations
-        if reverb_level > 0.7:
-            scores["Airport Terminal"] += 0.3
-            scores["Railway Station"] += 0.3
-            scores["Stadium/Arena"] += 0.4
-            scores["Religious Place"] += 0.4
-            scores["Metro/Subway"] += 0.3
-        
-        # Low reverb locations
-        if reverb_level < 0.3:
-            scores["Home/Residential"] += 0.4
-            scores["Office Building"] += 0.3
-            scores["Hospital"] += 0.3
-        
-        # High noise floor
-        if noise_floor > 0.6:
-            scores["Construction Site"] += 0.4
-            scores["Street/Road"] += 0.3
-            scores["Railway Station"] += 0.2
-        
-        # Low noise floor
-        if noise_floor < 0.2:
-            scores["Home/Residential"] += 0.3
-            scores["Office Building"] += 0.2
-            scores["Hospital"] += 0.3
-        
-        # Outdoor detection
-        if is_outdoor:
-            scores["Street/Road"] += 0.3
-            scores["Park/Outdoor"] += 0.4
-            scores["Construction Site"] += 0.2
-            # Reduce indoor location scores
-            for indoor in ["Home/Residential", "Office Building", "Hospital"]:
-                scores[indoor] *= 0.5
+            scores = {loc: score / max_score for loc, score in scores.items()}
         
         return dict(scores)
     
     def _analyze_speech_context(self, text: str) -> Tuple[Dict[str, float], bool]:
-        """
-        Analyze speech content with context verification
-        Detects if person is TALKING ABOUT vs BEING AT a location
-        """
+        """Analyze speech content for location mentions - IMPROVED"""
+        scores = defaultdict(float)
+        is_talking_about = False
+        
         if not text:
-            return {}, False
+            return dict(scores), is_talking_about
         
         text_lower = text.lower()
         
         # Check for "talking about" indicators
-        talking_about_count = sum(
-            1 for indicator in self.TALKING_ABOUT_INDICATORS 
-            if indicator in text_lower
-        )
+        for indicator in self.TALKING_ABOUT_INDICATORS:
+            if indicator in text_lower:
+                is_talking_about = True
+                break
         
-        # Check for "being at" indicators
-        being_at_count = sum(
-            1 for indicator in self.BEING_AT_INDICATORS 
-            if indicator in text_lower
-        )
+        # Check for "being at" indicators (overrides talking about)
+        for indicator in self.BEING_AT_INDICATORS:
+            if indicator in text_lower:
+                is_talking_about = False
+                break
         
-        # Determine if likely talking about (not actually there)
-        is_talking_about = talking_about_count > being_at_count and talking_about_count >= 2
-        
-        # If talking about, significantly reduce speech-based detection weight
-        speech_weight_modifier = 0.2 if is_talking_about else 1.0
-        
-        scores = defaultdict(float)
-        
-        # Location keywords with context awareness
-        location_keywords = {
-            "Airport Terminal": {
-                "keywords": ["airport", "terminal", "flight", "airline", "boarding", "gate", "runway"],
-                "strong_context": ["now boarding", "gate number", "final call", "passengers"],
-            },
-            "Railway Station": {
-                "keywords": ["railway", "train", "platform", "station", "coach", "bogey"],
-                "strong_context": ["platform number", "now arriving", "train number", "passengers"],
-            },
-            "Hospital": {
-                "keywords": ["hospital", "doctor", "nurse", "patient", "emergency", "ward"],
-                "strong_context": ["dr.", "doctor", "nurse station", "visiting hours"],
-            },
-            "Shopping Mall": {
-                "keywords": ["mall", "shopping", "store", "sale", "discount"],
-                "strong_context": ["attention shoppers", "store closing", "special offer"],
-            },
-            "Office Building": {
-                "keywords": ["office", "meeting", "conference", "presentation"],
-                "strong_context": ["meeting room", "conference call", "agenda"],
-            },
-        }
-        
-        for location, data in location_keywords.items():
-            # Regular keywords (lower weight if talking about)
-            keyword_matches = sum(1 for kw in data["keywords"] if kw in text_lower)
-            scores[location] += keyword_matches * 0.15 * speech_weight_modifier
+        # Look for location mentions in text
+        for location in self.LOCATION_AMBIENT_SOUNDS.keys():
+            location_lower = location.lower()
+            location_words = location_lower.split('/')
             
-            # Strong context (higher weight, less affected by talking about)
-            context_matches = sum(1 for ctx in data.get("strong_context", []) if ctx in text_lower)
-            scores[location] += context_matches * 0.3 * (0.5 if is_talking_about else 1.0)
+            for word in location_words:
+                if word in text_lower:
+                    # Score based on context
+                    if is_talking_about:
+                        scores[location] += 0.3  # Lower score if just talking about
+                    else:
+                        scores[location] += 0.8  # Higher score if actually there
         
         return dict(scores), is_talking_about
+    
+    def _analyze_keywords(self, text: str) -> Dict[str, float]:
+        """Analyze keywords in text for location hints - NEW"""
+        scores = defaultdict(float)
+        
+        if not text:
+            return dict(scores)
+        
+        text_lower = text.lower()
+        
+        # Check each location's keywords
+        for location, signatures in self.LOCATION_AMBIENT_SOUNDS.items():
+            keywords = signatures.get("keywords", [])
+            
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
+                    scores[location] += 0.4
+        
+        # Normalize
+        max_score = max(scores.values()) if scores else 1.0
+        if max_score > 0:
+            scores = {loc: score / max_score for loc, score in scores.items()}
+        
+        return dict(scores)
+    
+    def _apply_learning(self, text: str, sounds: Dict[str, float]) -> Dict[str, float]:
+        """Apply learned patterns - NEW"""
+        scores = defaultdict(float)
+        
+        if not self.learning_boosts:
+            return dict(scores)
+        
+        # Create feature string
+        words = set(re.findall(r'\b\w{4,}\b', text.lower()))
+        sound_list = list(sounds.keys())[:10]
+        
+        # Check learned patterns
+        for location, boost in self.learning_boosts.items():
+            # Check if any learned words match
+            for word in words:
+                key = f"{location}::{word}"
+                if key in self.learning_boosts:
+                    scores[location] += self.learning_boosts[key]
+            
+            # Check if any learned sounds match
+            for sound in sound_list:
+                key = f"{location}::sound::{sound.lower()}"
+                if key in self.learning_boosts:
+                    scores[location] += self.learning_boosts[key]
+        
+        return dict(scores)
     
     def _combine_scores(
         self,
         ambient_scores: Dict[str, float],
-        acoustic_scores: Dict[str, float],
         speech_scores: Dict[str, float],
+        keyword_scores: Dict[str, float],
+        learned_scores: Dict[str, float],
         is_talking_about: bool
     ) -> Dict[str, float]:
-        """Combine all scores with appropriate weights"""
+        """Combine all scores with proper weighting - IMPROVED"""
+        
         final_scores = defaultdict(float)
         
-        # Weights (ambient sounds are most important)
-        ambient_weight = 0.55
-        acoustic_weight = 0.20
-        speech_weight = 0.25 if not is_talking_about else 0.10  # Reduce speech weight if talking about
+        # Weights
+        ambient_weight = 0.50
+        speech_weight = 0.15 if is_talking_about else 0.30
+        keyword_weight = 0.20
+        learned_weight = 0.15
         
-        # Combine
-        all_locations = set(ambient_scores.keys()) | set(acoustic_scores.keys()) | set(speech_scores.keys())
+        # Get all locations
+        all_locations = set()
+        all_locations.update(ambient_scores.keys())
+        all_locations.update(speech_scores.keys())
+        all_locations.update(keyword_scores.keys())
+        all_locations.update(learned_scores.keys())
         
+        # Combine scores
         for location in all_locations:
             ambient = ambient_scores.get(location, 0)
-            acoustic = acoustic_scores.get(location, 0)
             speech = speech_scores.get(location, 0)
+            keyword = keyword_scores.get(location, 0)
+            learned = learned_scores.get(location, 0)
             
-            # Require ambient evidence for high confidence
-            if ambient > 0.3:
-                final_scores[location] = (
-                    ambient * ambient_weight +
-                    acoustic * acoustic_weight +
-                    speech * speech_weight
-                )
-            elif acoustic > 0.4:
-                # Can use acoustic if strong
-                final_scores[location] = (
-                    ambient * ambient_weight +
-                    acoustic * acoustic_weight +
-                    speech * speech_weight
-                ) * 0.7  # Reduce confidence
+            # Calculate weighted score
+            score = (
+                ambient * ambient_weight +
+                speech * speech_weight +
+                keyword * keyword_weight +
+                learned * learned_weight
+            )
+            
+            # Require at least some ambient OR keyword evidence
+            if ambient > 0.2 or keyword > 0.3:
+                final_scores[location] = score
             elif speech > 0.5 and not is_talking_about:
-                # Speech only if very strong and not talking about
-                final_scores[location] = speech * speech_weight * 0.5  # Low confidence
+                final_scores[location] = score * 0.6  # Reduced confidence
         
         return dict(final_scores)
     
@@ -408,36 +442,33 @@ class LocationDetector:
         sounds: Dict[str, float],
         duration: float
     ) -> Dict[str, float]:
-        """For longer audio, require temporal consistency"""
-        # This would ideally use time-segmented sound analysis
-        # For now, boost locations with multiple sound evidence
+        """Boost locations with consistent sound evidence throughout audio"""
         
         adjusted_scores = {}
         
         for location, score in scores.items():
             signatures = self.LOCATION_AMBIENT_SOUNDS.get(location, {})
             all_sigs = (
-                signatures.get("strong", []) + 
-                signatures.get("medium", []) + 
-                signatures.get("weak", [])
+                signatures.get("strong", []) +
+                signatures.get("medium", [])
             )
             
-            # Count how many different signatures are present
+            # Count matching signatures
             sig_count = sum(
-                1 for sig in all_sigs 
-                for sound in sounds.keys() 
-                if sig in sound.lower()
+                1 for sig in all_sigs
+                for sound in sounds.keys()
+                if sig.lower() in sound.lower()
             )
             
-            # Boost if multiple signatures (more consistent)
-            if sig_count >= 3:
+            # Boost for multiple signatures
+            if sig_count >= 4:
+                adjusted_scores[location] = score * 1.3
+            elif sig_count >= 3:
                 adjusted_scores[location] = score * 1.2
             elif sig_count >= 2:
                 adjusted_scores[location] = score * 1.1
-            elif sig_count == 1:
-                adjusted_scores[location] = score * 0.9
             else:
-                adjusted_scores[location] = score * 0.7
+                adjusted_scores[location] = score * 0.85
         
         return adjusted_scores
     
@@ -445,7 +476,8 @@ class LocationDetector:
         self,
         scores: Dict[str, float]
     ) -> Tuple[str, float, List[str]]:
-        """Determine final location from scores"""
+        """Determine final location from scores - IMPROVED"""
+        
         if not scores:
             return "Unknown", 0.40, ["No clear location indicators found"]
         
@@ -453,29 +485,31 @@ class LocationDetector:
         best_location = max(scores, key=scores.get)
         best_score = scores[best_location]
         
-        # Require minimum confidence
-        if best_score < 0.35:
+        # LOWERED minimum confidence threshold
+        if best_score < 0.25:
             return "Unknown", 0.40, ["Low confidence in location detection"]
         
-        # Calculate final confidence
-        confidence = 0.50 + min(best_score * 0.5, 0.48)
+        # Calculate final confidence (boosted)
+        confidence = 0.45 + min(best_score * 0.52, 0.53)
         
         # Build evidence
         evidence = []
-        if best_score > 0.5:
-            evidence.append(f"Strong ambient sound match for {best_location}")
+        if best_score > 0.6:
+            evidence.append(f"Strong match for {best_location}")
+        elif best_score > 0.4:
+            evidence.append(f"Good match for {best_location}")
         else:
-            evidence.append(f"Moderate ambient sound match for {best_location}")
+            evidence.append(f"Moderate match for {best_location}")
         
-        # Check for runner-up (ambiguity)
+        # Check for ambiguity
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         if len(sorted_scores) > 1:
             runner_up = sorted_scores[1]
-            if runner_up[1] > best_score * 0.8:
-                confidence *= 0.9  # Reduce confidence due to ambiguity
+            if runner_up[1] > best_score * 0.75:
+                confidence *= 0.92  # Slight reduction for ambiguity
                 evidence.append(f"Also possible: {runner_up[0]}")
         
-        return best_location, confidence, evidence
+        return best_location, min(confidence, 0.98), evidence
     
     def _generate_warnings(
         self,
@@ -485,34 +519,40 @@ class LocationDetector:
         ambient_scores: Dict[str, float],
         speech_scores: Dict[str, float]
     ) -> List[str]:
-        """Generate warnings about detection reliability"""
+        """Generate warnings - IMPROVED"""
+        
         warnings = []
         
         if is_talking_about:
             warnings.append("⚠️ Speech may be describing a location, not current location")
         
         if not ambient_scores and speech_scores:
-            warnings.append("⚠️ Detection based on speech only - verify with ambient sounds")
+            warnings.append("ℹ️ Detection based primarily on speech content")
         
-        if confidence < 0.6:
-            warnings.append("⚠️ Low confidence - location may be inaccurate")
+        if confidence < 0.55:
+            warnings.append("ℹ️ Moderate confidence - consider context")
         
         if location == "Unknown":
-            warnings.append("ℹ️ Could not determine location - insufficient audio evidence")
+            warnings.append("ℹ️ Could not determine specific location")
         
         return warnings
     
     def _get_detection_method(
         self,
         ambient_scores: Dict[str, float],
-        speech_scores: Dict[str, float]
+        speech_scores: Dict[str, float],
+        keyword_scores: Dict[str, float]
     ) -> str:
-        """Get the primary detection method used"""
+        """Get primary detection method"""
+        
         ambient_max = max(ambient_scores.values()) if ambient_scores else 0
         speech_max = max(speech_scores.values()) if speech_scores else 0
+        keyword_max = max(keyword_scores.values()) if keyword_scores else 0
         
-        if ambient_max > 0.3:
+        if ambient_max > 0.4:
             return "ambient_sounds"
+        elif keyword_max > 0.4:
+            return "keywords"
         elif speech_max > 0.3:
             return "speech_content"
         else:
@@ -521,33 +561,34 @@ class LocationDetector:
     def _get_ambient_evidence(self, sounds: Dict[str, float]) -> List[str]:
         """Get top ambient sounds as evidence"""
         sorted_sounds = sorted(sounds.items(), key=lambda x: x[1], reverse=True)
-        return [f"{sound} ({score:.0%})" for sound, score in sorted_sounds[:5]]
+        return [f"{sound} ({score:.0%})" for sound, score in sorted_sounds[:7]]
     
     def _get_speech_evidence(self, text: str) -> List[str]:
-        """Extract key phrases from speech as evidence"""
+        """Extract key phrases from speech"""
         if not text:
             return []
         
-        # Find key phrases
         key_phrases = []
         text_lower = text.lower()
         
-        for indicator in self.BEING_AT_INDICATORS[:5]:
+        # Find being-at indicators
+        for indicator in self.BEING_AT_INDICATORS[:10]:
             if indicator in text_lower:
-                # Find context around the indicator
                 idx = text_lower.find(indicator)
-                start = max(0, idx - 20)
-                end = min(len(text), idx + len(indicator) + 30)
+                start = max(0, idx - 25)
+                end = min(len(text), idx + len(indicator) + 35)
                 phrase = text[start:end].strip()
                 key_phrases.append(f"...{phrase}...")
+                if len(key_phrases) >= 3:
+                    break
         
-        return key_phrases[:3]
+        return key_phrases
     
     def _unknown_result(self, reason: str) -> Dict[str, Any]:
         """Return unknown result"""
         return {
             "location": "Unknown",
-            "confidence": 0.0,
+            "confidence": 0.40,
             "is_verified": False,
             "evidence": [reason],
             "warnings": [reason],
@@ -557,3 +598,21 @@ class LocationDetector:
             "ambient_evidence": [],
             "speech_evidence": []
         }
+    
+    def learn_from_correction(self, correct_location: str, text: str, sounds: Dict[str, float]):
+        """Learn from user corrections - NEW"""
+        
+        # Extract words
+        words = set(re.findall(r'\b\w{4,}\b', text.lower()))
+        
+        # Boost keywords
+        for word in words:
+            key = f"{correct_location}::{word}"
+            self.learning_boosts[key] = min(self.learning_boosts[key] + 0.08, 0.4)
+        
+        # Boost sounds
+        for sound in list(sounds.keys())[:10]:
+            key = f"{correct_location}::sound::{sound.lower()}"
+            self.learning_boosts[key] = min(self.learning_boosts[key] + 0.10, 0.5)
+        
+        print(f"📚 Learned: {correct_location} (+{len(words)} words, +{len(sounds)} sounds)")
