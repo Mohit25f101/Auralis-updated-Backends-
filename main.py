@@ -16,10 +16,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 warnings.filterwarnings('ignore')
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.getLogger('transformers').setLevel(logging.ERROR)
-
 # ==============================
 # 📦 IMPORTS
 # ==============================
@@ -105,8 +105,11 @@ try:
     from deep_translator import GoogleTranslator
     deep_translator_available = True
     print("   ✅ deep_translator")
-except:
-    print("   ⚠️ deep_translator not installed (install for translation support)")
+except ImportError:
+    print("   ⚠️ deep_translator not installed")
+    print("      Install: pip install deep-translator")
+except Exception as e:
+    print(f"   ⚠️ deep_translator error: {e}")
 
 print("="*60)
 
@@ -135,7 +138,11 @@ SITUATIONS = [
     "Train Delay", "Sports Event", "Concert/Music", "Unknown"
 ]
 
-FFMPEG_PATH = r"D:\photo\ffmpeg\ffmpeg-2026-01-07-git-af6a1dd0b2-full_build\bin"
+# Auto-detect FFmpeg path based on OS
+if os.name == 'nt':  # Windows
+    FFMPEG_PATH = r"D:\DD\ffmpeg-2026-01-07-git-af6a1dd0b2-full_build\ffmpeg-2026-01-07-git-af6a1dd0b2-full_build\bin"
+else:  # Linux/Mac
+    FFMPEG_PATH = "/usr/bin"
 LEARNING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learned_data.json")
 
 
@@ -143,18 +150,44 @@ LEARNING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learne
 # 🎬 FFMPEG
 # ==============================
 def setup_ffmpeg():
+    """Setup FFmpeg with comprehensive path checking for both Windows and Linux."""
     try:
-        if shutil.which("ffmpeg"):
-            print("✅ FFmpeg found")
+        # Add common Linux paths to environment PATH first
+        if os.name != 'nt':  # Linux/Mac
+            common_paths = ["/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin"]
+            current_path = os.environ.get("PATH", "")
+            
+            for path in common_paths:
+                if path not in current_path:
+                    os.environ["PATH"] = path + os.pathsep + current_path
+                    current_path = os.environ["PATH"]
+        
+        # Now check if ffmpeg is available
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path:
+            print(f"✅ FFmpeg found at: {ffmpeg_path}")
             return True
-        if os.path.isdir(FFMPEG_PATH):
+        
+        # Try custom FFMPEG_PATH as fallback (for Windows or custom installations)
+        if 'FFMPEG_PATH' in globals() and os.path.isdir(FFMPEG_PATH):
             os.environ["PATH"] = FFMPEG_PATH + os.pathsep + os.environ.get("PATH", "")
-            if shutil.which("ffmpeg"):
-                print("✅ FFmpeg enabled")
+            ffmpeg_path = shutil.which("ffmpeg")
+            if ffmpeg_path:
+                print(f"✅ FFmpeg enabled from custom path: {ffmpeg_path}")
                 return True
-        print("⚠️ FFmpeg not found")
+        
+        # Last resort: try direct paths
+        if os.name != 'nt':
+            for direct_path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
+                if os.path.exists(direct_path):
+                    print(f"✅ FFmpeg found at: {direct_path}")
+                    return True
+        
+        print("⚠️ FFmpeg not found - audio conversion will be limited")
+        print("   Install FFmpeg: sudo apt-get install ffmpeg (Linux)")
         return False
-    except:
+    except Exception as e:
+        print(f"⚠️ FFmpeg setup error: {e}")
         return False
 
 
@@ -303,22 +336,40 @@ class WhisperManager:
     def load(self):
         if self.loaded:
             return True
-        if not pipeline_func:
-            print("❌ Whisper: Transformers not available")
+        if not pipeline_func or not torch:
+            print("❌ Whisper: Transformers or PyTorch not available")
             return False
         try:
             print("🔄 Loading Whisper...")
+            # Disable torchcodec to avoid errors
+            import os
+            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+            
             self.pipe = pipeline_func(
                 "automatic-speech-recognition",
                 model="openai/whisper-small",
                 chunk_length_s=30,
+                device="cpu",  # Explicitly use CPU to avoid device issues
+                return_timestamps=False,  # Disable timestamps to avoid torchcodec
             )
             self.loaded = True
             print("✅ Whisper loaded!")
             return True
         except Exception as e:
             print(f"❌ Whisper error: {e}")
-            return False
+            # Fallback: try without chunk_length_s
+            try:
+                self.pipe = pipeline_func(
+                    "automatic-speech-recognition",
+                    model="openai/whisper-small",
+                    device="cpu",
+                )
+                self.loaded = True
+                print("✅ Whisper loaded (fallback mode)!")
+                return True
+            except Exception as e2:
+                print(f"❌ Whisper fallback failed: {e2}")
+                return False
 
     def transcribe(self, path):
         """Returns translated (English) text + detected language + native transcription."""
@@ -360,19 +411,34 @@ class WhisperManager:
 
             conf = 0.90 if len(words) >= 10 else (0.85 if len(words) >= 5 else 0.75)
 
+            # Try to extract language from result if available
+            detected_lang = "unknown"
+            if hasattr(result_native, 'get') and 'chunks' in result_native:
+                # Try to get language from chunks
+                for chunk in result_native.get('chunks', []):
+                    if 'language' in chunk:
+                        detected_lang = chunk['language']
+                        break
+            
             return {
                 "text": clean,
                 "raw": raw_en,
                 "native_text": raw_native,
                 "confidence": conf,
                 "is_reliable": True,
-                "detected_language": "unknown"  # filled later by LanguageDetector
+                "detected_language": detected_lang
             }
 
         except Exception as e:
-            print(f"   ⚠️ Transcription error: {str(e)[:60]}")
+            error_msg = str(e)
+            # Filter out verbose torchcodec errors
+            if "torchcodec" in error_msg or "libtorchcodec" in error_msg:
+                print(f"   ⚠️ Transcription warning: Audio codec compatibility issue (continuing anyway)")
+            else:
+                print(f"   ⚠️ Transcription error: {error_msg[:80]}")
+            
             return {"text": "", "confidence": 0, "is_reliable": False,
-                    "detected_language": "unknown", "native_text": "", "error": str(e)[:60]}
+                    "detected_language": "unknown", "native_text": "", "error": error_msg[:100]}
 
 
 # ==============================
@@ -1120,29 +1186,50 @@ class Analyzer:
                 "emirates": 5, "british airways": 5, "air india": 5, "indigo": 4.5,
                 "economy": 3.5, "business class": 4, "passport": 3.5, "baggage": 3.5,
                 "departure": 4, "arrival": 4, "passengers": 2.5,
+                # International terms
+                "аэропорт": 5, "самолет": 5, "рейс": 5, "посадка": 4.5,  # Russian
+                "飞机场": 5, "航班": 5,  # Chinese
+                "हवाई अड्डा": 5, "विमान": 5,  # Hindi
             },
             "Railway Station": {
                 "railway": 5, "train": 5, "platform": 5, "station": 3.5, "locomotive": 5,
                 "coach": 4, "compartment": 4, "bogey": 4.5, "rail": 4.5, "track": 3.5,
                 "rajdhani": 5, "shatabdi": 5, "indian railways": 5, "irctc": 5,
                 "express": 3, "local train": 4, "reservation": 3.5, "engine": 3,
+                # International terms
+                "вокзал": 5, "поезд": 5, "платформа": 5,  # Russian
+                "火车站": 5, "列车": 5,  # Chinese
+                "रेलवे स्टेशन": 5, "ट्रेन": 5,  # Hindi
             },
             "Hospital": {
                 "hospital": 5, "doctor": 5, "nurse": 5, "patient": 5, "medical": 4.5,
                 "emergency": 4, "ambulance": 5, "surgery": 5, "ward": 4.5, "icu": 5,
                 "clinic": 4, "medicine": 3.5, "treatment": 4,
+                # International terms
+                "больница": 5, "врач": 5, "медицина": 4.5,  # Russian
+                "医院": 5, "医生": 5,  # Chinese
             },
             "Shopping Mall": {
                 "mall": 5, "shopping": 5, "shop": 4, "store": 4, "sale": 3.5,
                 "discount": 3.5, "customer": 2.5, "escalator": 4.5, "food court": 5,
+                # International terms
+                "торговый центр": 5, "магазин": 5,  # Russian
+                "购物中心": 5, "商店": 5,  # Chinese
             },
             "Street/Road": {
                 "traffic": 5, "road": 4.5, "highway": 5, "street": 4, "car": 3.5,
                 "vehicle": 3.5, "signal": 4, "crossing": 3.5, "jam": 4, "horn": 3.5,
+                # International terms
+                "дорога": 4.5, "улица": 4, "трафик": 5,  # Russian
+                "道路": 4.5, "街道": 4,  # Chinese
             },
             "Office Building": {
                 "office": 5, "meeting": 4.5, "conference": 5, "presentation": 4.5,
                 "manager": 4, "corporate": 4.5, "company": 3.5, "project": 3.5,
+                "work": 3, "desk": 3.5, "colleague": 4,
+                # International terms
+                "офис": 5, "работа": 3.5, "совещание": 4.5,  # Russian
+                "办公室": 5, "会议": 4.5,  # Chinese
             },
             "Stadium/Arena": {
                 "stadium": 5, "arena": 5, "match": 5, "game": 4, "team": 3.5,
@@ -1151,10 +1238,16 @@ class Analyzer:
             "Religious Place": {
                 "temple": 5, "church": 5, "mosque": 5, "prayer": 4.5, "worship": 4.5,
                 "aarti": 5, "namaz": 5, "mandir": 5, "masjid": 5,
+                # International terms
+                "церковь": 5, "молитва": 4.5,  # Russian
+                "寺庙": 5, "教堂": 5,  # Chinese
             },
             "Restaurant/Cafe": {
                 "restaurant": 5, "cafe": 5, "food": 3.5, "menu": 4.5, "waiter": 4.5,
-                "chef": 5, "table": 3, "order": 3.5,
+                "chef": 5, "table": 3, "order": 3.5, "dinner": 3.5, "lunch": 3.5,
+                # International terms
+                "ресторан": 5, "кафе": 5, "еда": 3.5,  # Russian
+                "餐厅": 5, "咖啡馆": 5,  # Chinese
             },
             "Park/Outdoor": {
                 "park": 5, "garden": 5, "outdoor": 4, "nature": 4.5, "tree": 3.5,
@@ -1163,12 +1256,23 @@ class Analyzer:
             "Metro/Subway": {
                 "metro": 5, "subway": 5, "underground": 5, "delhi metro": 5,
                 "mumbai metro": 5, "token": 3.5,
+                # International terms
+                "метро": 5,  # Russian
+                "地铁": 5,  # Chinese
             },
             "Construction Site": {
                 "construction": 5, "cement": 4.5, "crane": 5, "scaffold": 5,
                 "building site": 5, "labor": 3.5,
             },
+            "School/University": {
+                "school": 5, "university": 5, "college": 5, "class": 4, "student": 4.5,
+                "teacher": 4.5, "professor": 5, "lecture": 5, "exam": 4.5,
+                # International terms
+                "школа": 5, "университет": 5, "студент": 4.5,  # Russian
+                "学校": 5, "大学": 5,  # Chinese
+            },
         }
+
         self.sit_kw = {
             "Emergency": {
                 "emergency": 5, "help": 4.5, "fire": 5, "accident": 5, "danger": 5,
